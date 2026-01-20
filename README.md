@@ -104,6 +104,63 @@ LLM-Lasso supports RAG using local PDF documents (e.g., scientific papers) in ad
        --model-type gpt-4o
    ```
 
+5. **Inspect Vectorstore Contents**: To visualize what papers are stored in your ChromaDB vectorstore:
+   ```python
+   from llm_lasso.llm_penalty.rag import load_pdf_vectorstore
+   from langchain_openai import OpenAIEmbeddings
+   import os
+   
+   os.environ["OPENAI_API_KEY"] = "your-api-key"  # Required for embeddings
+   embeddings = OpenAIEmbeddings()
+   
+   # Load existing vectorstore
+   vectorstore = load_pdf_vectorstore(
+       persist_directory="pdf_vectorstore",
+       embedding_model=embeddings
+   )
+   
+   # Get collection statistics
+   collection = vectorstore._collection
+   total_chunks = collection.count()
+   print(f"Total document chunks: {total_chunks}")
+   
+   # Get all documents and their metadata
+   results = collection.get()
+   
+   # Extract unique papers
+   unique_papers = {}
+   for i, metadata in enumerate(results.get("metadatas", [])):
+       filename = metadata.get("filename", "Unknown")
+       page = metadata.get("page", "N/A")
+       title = metadata.get("title", filename)
+       
+       if filename not in unique_papers:
+           unique_papers[filename] = {
+               "title": title,
+               "pages": [],
+               "chunk_count": 0
+           }
+       unique_papers[filename]["pages"].append(page)
+       unique_papers[filename]["chunk_count"] += 1
+   
+   # Display papers in vectorstore
+   print("\n" + "="*60)
+   print("Papers in Vectorstore:")
+   print("="*60)
+   for filename, info in unique_papers.items():
+       pages = sorted(set(info["pages"]), key=lambda x: int(x) if isinstance(x, int) else 0)
+       print(f"\n📄 {info['title']}")
+       print(f"   File: {filename}")
+       print(f"   Pages: {min(pages)}-{max(pages)} ({len(pages)} pages)")
+       print(f"   Total chunks: {info['chunk_count']}")
+   ```
+   
+   Alternatively, use the interactive script which displays collection stats:
+   ```bash
+   $ python playground/interactive_pdf_RAG.py
+   # Type 'stats' at the prompt to see collection statistics
+   ```
+
 The PDF RAG pipeline uses `pymupdf4llm` for high-quality text extraction optimized for scientific papers, preserving document structure, tables, and formatting.
 
 ## Repo Structure
