@@ -37,6 +37,7 @@ dependencies = [
     "xmltodict==0.14.2",
     "pymupdf4llm>=0.0.17",
     "chromadb>=0.5.0",
+    "python-dotenv>=1.0.0",
 ]
 
 [tool.setuptools.packages.find]

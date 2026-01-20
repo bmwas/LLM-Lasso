@@ -10,8 +10,14 @@ import os
 import sys
 import warnings
 
-# Add parent directory to path for imports
-sys.path.insert(0, "..")
+# Add parent directory to path for imports (use absolute path based on script location)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+sys.path.insert(0, PROJECT_ROOT)
+
+# Load environment variables from .env file
+from dotenv import load_dotenv
+load_dotenv(os.path.join(PROJECT_ROOT, '.env'))  # Load from project root .env
 
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
@@ -26,19 +32,54 @@ from llm_lasso.llm_penalty.rag.pdf_vectorstore import (
 )
 from llm_lasso.utils.chunking import chunk_pdf_documents
 
-import constants
-
 warnings.filterwarnings("ignore")  # Suppress warnings
-os.environ["OPENAI_API_KEY"] = constants.OPENAI_API
+
+# Try to import constants, fall back to environment variables
+try:
+    import constants
+    OPENAI_API_KEY = getattr(constants, 'OPENAI_API', None)
+except (ImportError, ModuleNotFoundError):
+    constants = None
+    OPENAI_API_KEY = None
+
+# Set OpenAI API key from constants or environment variable (already loaded from .env)
+if OPENAI_API_KEY:
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+elif "OPENAI_API_KEY" not in os.environ:
+    print("\n" + "="*60)
+    print("ERROR: OpenAI API key not found!")
+    print("="*60)
+    print("\nPlease either:")
+    print("1. Create a '.env' file in the project root with:")
+    print("   OPENAI_API_KEY=your-openai-api-key")
+    print("\n2. Or create '_my_constants.py' with:")
+    print("   OPENAI_API = 'your-openai-api-key'")
+    print("\n3. Or set the environment variable:")
+    print("   export OPENAI_API_KEY='your-openai-api-key'")
+    print("="*60)
+    sys.exit(1)
 
 # ==================== Configuration ====================
 
 # Enable persistence to save the database to disk
 PERSIST = True
 
-# File paths - use constants if available, otherwise use defaults
-PDF_DATA_DIRECTORY = getattr(constants, 'PDF_DATA_DIRECTORY', '../sample_pdfs')
-PDF_PERSIST_DIRECTORY = getattr(constants, 'PDF_PERSIST_DIRECTORY', '../pdf_vectorstore')
+# File paths - use constants if available, otherwise use defaults (relative to project root)
+_default_pdf_data = os.path.join(PROJECT_ROOT, 'sample_pdfs')
+_default_pdf_persist = os.path.join(PROJECT_ROOT, 'pdf_vectorstore')
+
+if constants is not None:
+    PDF_DATA_DIRECTORY = getattr(constants, 'PDF_DATA_DIRECTORY', _default_pdf_data)
+    PDF_PERSIST_DIRECTORY = getattr(constants, 'PDF_PERSIST_DIRECTORY', _default_pdf_persist)
+else:
+    PDF_DATA_DIRECTORY = _default_pdf_data
+    PDF_PERSIST_DIRECTORY = _default_pdf_persist
+
+# Convert to absolute paths if they're relative
+if not os.path.isabs(PDF_DATA_DIRECTORY):
+    PDF_DATA_DIRECTORY = os.path.join(PROJECT_ROOT, PDF_DATA_DIRECTORY)
+if not os.path.isabs(PDF_PERSIST_DIRECTORY):
+    PDF_PERSIST_DIRECTORY = os.path.join(PROJECT_ROOT, PDF_PERSIST_DIRECTORY)
 
 # Chunking parameters
 CHUNK_SIZE = 1000
@@ -54,7 +95,7 @@ print("=" * 60)
 if not os.path.exists(PDF_DATA_DIRECTORY):
     print(f"\nWarning: PDF directory not found at {PDF_DATA_DIRECTORY}")
     print("Please ensure sample_pdfs/ directory exists with PDF files.")
-    alt_path = os.path.join(os.path.dirname(__file__), '..', 'sample_pdfs')
+    alt_path = os.path.join(PROJECT_ROOT, 'sample_pdfs')
     if os.path.exists(alt_path):
         PDF_DATA_DIRECTORY = alt_path
         print(f"Found alternate path: {PDF_DATA_DIRECTORY}")
