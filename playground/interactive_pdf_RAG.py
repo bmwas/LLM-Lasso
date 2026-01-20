@@ -43,15 +43,21 @@ except (ImportError, ModuleNotFoundError):
     OPENAI_API_KEY = None
 
 # Set OpenAI API key from constants or environment variable (already loaded from .env)
+# Check both OPENAI_API_KEY (standard) and OPENAI_API (used in this project's constants)
 if OPENAI_API_KEY:
     os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-elif "OPENAI_API_KEY" not in os.environ:
+elif "OPENAI_API_KEY" in os.environ:
+    pass  # Already set
+elif "OPENAI_API" in os.environ:
+    os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_API"]
+else:
     print("\n" + "="*60)
     print("ERROR: OpenAI API key not found!")
     print("="*60)
     print("\nPlease either:")
     print("1. Create a '.env' file in the project root with:")
     print("   OPENAI_API_KEY=your-openai-api-key")
+    print("   (or OPENAI_API=your-openai-api-key)")
     print("\n2. Or create '_my_constants.py' with:")
     print("   OPENAI_API = 'your-openai-api-key'")
     print("\n3. Or set the environment variable:")
