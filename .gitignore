@@ -1,10 +1,58 @@
+# Python
 __pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
 venv/
-data/
+env/
+ENV/
+.venv/
+.ENV/
+virtualenv/
+.virtualenv/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+_my_constants.py
+
+# Jupyter Notebooks
 .ipynb_checkpoints/
-*.egg-info
+*.ipynb_checkpoints
+
+# Package files
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Data directories
+data/
+
+# OMIM scrape (ignore data, keep code)
 omim_scrape/
 +!/omim_scrape/*.py
-_my_constants.py
+
+# Test files
 test.ipynb
 test/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ChromaDB / Vectorstores
+pdf_vectorstore/
+omim_vectorstore/
+*.chroma/
