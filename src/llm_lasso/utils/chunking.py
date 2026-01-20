@@ -1,8 +1,10 @@
 """
-This script implementes chunking for the .json file scraped down from Omim.
+This script implements chunking for the .json file scraped down from Omim
+and for PDF documents extracted via pymupdf4llm.
 """
 
 import json
+from typing import Optional
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from tqdm import tqdm
 
@@ -89,3 +91,108 @@ def chunk_by_gene(json_file, output_file, chunk_size=1000, chunk_overlap=200):
             f_out.write(json.dumps(chunk) + "\n")
 
     print(f"Chunked data saved to {output_file}")
+
+
+def chunk_pdf_documents(
+    documents: list[dict],
+    chunk_size: int = 1000,
+    chunk_overlap: int = 200,
+    output_file: Optional[str] = None
+) -> list[dict]:
+    """
+    Chunk PDF documents extracted by pdf_RAG_process into smaller pieces for vectorstore ingestion.
+    
+    Args:
+        documents: List of dictionaries from extract_text_from_pdf or load_pdfs_from_directory.
+                   Each dict should have 'content' and 'metadata' keys.
+        chunk_size: Maximum size of each chunk in characters.
+        chunk_overlap: Overlap between consecutive chunks.
+        output_file: Optional path to save chunked output as JSON lines file.
+    
+    Returns:
+        List of chunked documents with preserved and updated metadata.
+    """
+    # Initialize text splitter with separators appropriate for markdown/scientific text
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=[
+            "\n## ",      # Major section headers (markdown)
+            "\n### ",     # Subsection headers
+            "\n#### ",    # Sub-subsection headers
+            "\n\n",       # Paragraph breaks
+            "\n",         # Line breaks
+            ". ",         # Sentence boundaries
+            ", ",         # Clause boundaries
+            " ",          # Word boundaries
+            ""            # Character fallback
+        ]
+    )
+    
+    chunks = []
+    
+    for doc in tqdm(documents, desc="Chunking PDF documents"):
+        content = doc.get("content", "")
+        metadata = doc.get("metadata", {}).copy()
+        
+        if not content.strip():
+            continue
+        
+        # Split the content into chunks
+        text_chunks = text_splitter.split_text(content)
+        
+        for chunk_idx, chunk in enumerate(text_chunks):
+            if not chunk.strip():
+                continue
+                
+            # Create new metadata with chunk information
+            chunk_metadata = metadata.copy()
+            chunk_metadata["chunk_index"] = chunk_idx
+            chunk_metadata["total_chunks"] = len(text_chunks)
+            
+            # Try to extract section header from chunk if present
+            section_header = _extract_section_header(chunk)
+            if section_header:
+                chunk_metadata["section_header"] = section_header
+            
+            chunks.append({
+                "content": chunk.strip(),
+                "metadata": chunk_metadata
+            })
+    
+    print(f"Created {len(chunks)} chunks from {len(documents)} document(s)")
+    
+    # Optionally save to file
+    if output_file:
+        with open(output_file, "w", encoding="utf-8") as f_out:
+            for chunk in chunks:
+                f_out.write(json.dumps(chunk) + "\n")
+        print(f"Chunked data saved to {output_file}")
+    
+    return chunks
+
+
+def _extract_section_header(text: str) -> Optional[str]:
+    """
+    Extract a section header from the beginning of a text chunk if present.
+    
+    Args:
+        text: Text chunk that may start with a markdown header.
+    
+    Returns:
+        The section header text without markdown symbols, or None if not found.
+    """
+    lines = text.strip().split('\n')
+    if not lines:
+        return None
+    
+    first_line = lines[0].strip()
+    
+    # Check for markdown headers
+    if first_line.startswith('#'):
+        # Remove leading # symbols and whitespace
+        header = first_line.lstrip('#').strip()
+        if header:
+            return header
+    
+    return None

@@ -1,6 +1,7 @@
 
 from pydantic import BaseModel
 from dataclasses import dataclass, field
+from typing import Optional
 from langchain_community.vectorstores import Chroma
 from llm_lasso.llm_penalty.llm import LLMQueryWrapperWithMemory
 from llm_lasso.utils.score_collection import create_general_prompt, \
@@ -43,6 +44,10 @@ class PenaltyCollectionParams:
         "help": "Whether to perform RAG with the default OMIM vector store"})
     omim_rag_num_docs: int = field(default=3, metadata={
         "help": "Number of documents to retrieve for `omim_rag`"})
+    pdf_rag: bool = field(default=False, metadata={
+        "help": "Whether to perform RAG with local PDF documents"})
+    pdf_rag_num_docs: int = field(default=3, metadata={
+        "help": "Number of documents to retrieve for `pdf_rag`"})
     small: bool = field(default=False, metadata={
         "help": "For LLMs with small context sizes, reduce the amount of informatio retrieved for `omim_rag`"
     })
@@ -60,7 +65,8 @@ class PenaltyCollectionParams:
         return self.summarized_gene_doc_rag or \
             self.filtered_cancer_doc_rag or \
             self.pubmed_rag or \
-            self.omim_rag
+            self.omim_rag or \
+            self.pdf_rag
 
 
 def wipe_llm_penalties(save_dir, rag: bool):
@@ -128,8 +134,9 @@ def collect_penalties(
     model: LLMQueryWrapperWithMemory,
     params: PenaltyCollectionParams,
     omim_api_key: str = "",
-    parallel = True,
-    n_threads = 8
+    pdf_vectorstore: Optional[Chroma] = None,
+    parallel: bool = True,
+    n_threads: int = 8
 ):
     """
     Query features in batches and extract LLM-Lasso penalties.
@@ -147,6 +154,8 @@ def collect_penalties(
     - `params`: PenaltyCollectionParams object
     - `omim_api_key`: OMIM API key, only needed if
         `params.summarized_gene_doc_rag` is True
+    - `pdf_vectorstore`: Chroma vectorstore for PDF RAG, only needed if
+        `params.pdf_rag` is True
     """
     if params.wipe:
         logging.info("Wiping save directory before starting.")
@@ -204,6 +213,9 @@ def collect_penalties(
                 filtered_cancer_docs=params.filtered_cancer_doc_rag,
                 summarized_gene_docs=params.summarized_gene_doc_rag,
                 original_docs=params.omim_rag,
+                pdf_docs=params.pdf_rag,
+                pdf_vectorstore=pdf_vectorstore,
+                pdf_num_docs=params.pdf_rag_num_docs,
                 default_num_docs=params.omim_rag_num_docs,
                 small=params.small,
                 prompt_constr=params.rag_prompt_construction

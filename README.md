@@ -59,12 +59,61 @@ For a tutorial on the full LLM-Lasso pipeline, see `examples/llm_lasso_tutorial.
 
 For a tutorial on scraping the OMIM database and using the resulting documents for retrieval augmented generation (RAG), see `examples/omim_rag_tutorial.ipynb`.
 
+### PDF RAG Pipeline
+
+LLM-Lasso supports RAG using local PDF documents (e.g., scientific papers) in addition to OMIM and PubMed sources. To use PDF RAG:
+
+1. **Prepare PDF Documents**: Place your PDF files in a directory (default: `sample_pdfs/`).
+
+2. **Create PDF Vectorstore**: Use the interactive script or Python API to create a ChromaDB vectorstore from your PDFs:
+   ```bash
+   $ python playground/interactive_pdf_RAG.py
+   ```
+   
+   Or programmatically:
+   ```python
+   from llm_lasso.llm_penalty.rag import create_pdf_vectorstore
+   from langchain_openai import OpenAIEmbeddings
+   
+   embeddings = OpenAIEmbeddings()
+   vectorstore = create_pdf_vectorstore(
+       pdf_directory="sample_pdfs",
+       persist_directory="pdf_vectorstore",
+       chunk_size=1000,
+       chunk_overlap=200,
+       embedding_model=embeddings
+   )
+   ```
+
+3. **Configure Constants**: In `_my_constants.py`, set:
+   ```python
+   PDF_PERSIST_DIRECTORY = "pdf_vectorstore"  # ChromaDB persistence path
+   PDF_DATA_DIRECTORY = "sample_pdfs"  # Path to PDF files
+   ```
+
+4. **Use PDF RAG in Penalty Collection**: Enable PDF RAG when running `llm_lasso_scores.py`:
+   ```bash
+   $ python scripts/llm_lasso_scores.py \
+       --prompt-filename "prompts/your_prompt.txt" \
+       --feature_names_path "data/features.txt" \
+       --category "Your Category" \
+       --pdf_rag \
+       --pdf_rag_num_docs 3 \
+       --save_dir "results" \
+       --n-trials 1 \
+       --model-type gpt-4o
+   ```
+
+The PDF RAG pipeline uses `pymupdf4llm` for high-quality text extraction optimized for scientific papers, preserving document structure, tables, and formatting.
+
 ## Repo Structure
 
 - **`adelie-fork`**: `adelie` submodule, which is used for solving the penalty factor formation of Lasso.
 - **`examples`**: tutorials for LLM-Lasso and the OMIM RAG pipeline.
-- **`omim_scrape`**: helper fuctions for OMIM RAG.
+- **`omim_scrape`**: helper functions for OMIM RAG.
 - **`playground`**: some interactive scripts for querying LLMs, with or without RAG.
+    - **`interactive_pdf_RAG.py`**: interactive script for testing PDF RAG with local scientific papers.
+- **`sample_pdfs`**: directory containing sample PDF documents for PDF RAG.
 - **`prompts`**: prompts used for LLM-Lasso, the LLM-Score baseline, and vector store retrieval.
 - **`scripts`**: `python` scripts for the LLM-Lasso pipeline (generating data splits and getting LLM-Lasso penalties) and running the baselines.
 
@@ -80,9 +129,13 @@ For a tutorial on scraping the OMIM database and using the resulting documents f
     - **`pubmed_retrieve.py`**: prints out the information retrieved for a given gene through the Pubmed RAG pipeline.
 - **`src/llm_lasso`**: primary code for the `llm_lasso` package.
     - **`adversarial`**: adversarial feature name corruption.
-    - **`baselines`**: data-driven baseline, LLM-Score, and LMPriors implemetation.
+    - **`baselines`**: data-driven baseline, LLM-Score, and LMPriors implementation.
     - **`llm_penalty`**: generation of LLM-Lasso penalty factors, with and without RAG.
+        - **`rag`**: RAG modules for OMIM, PubMed, and PDF document retrieval.
+            - **`pdf_RAG_process.py`**: PDF text extraction using pymupdf4llm.
+            - **`pdf_vectorstore.py`**: ChromaDB vectorstore management for PDF documents.
     - **`task_specific_lasso`**: running LASSO with LLM-generated penalty factors and plotting results.
     - **`data_splits.py`**: generation of random training and test splits, which are used for both the baselines and LLM-Lasso.
     - **`utils`**: helper functions.
+        - **`chunking.py`**: text chunking utilities for OMIM JSON and PDF documents.
 - **`constants.py`**, **`sample_constants.py`**: files for storing API keys, etc.
