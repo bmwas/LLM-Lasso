@@ -1,0 +1,31 @@
+Ed_years
+Gender - Male
+CDRS.CDRSTscore
+CurMood - Depressed
+CurMood - Euthymic
+CurMood - Manic
+nmdep - 0 depressive episodes
+nmdep - 10+ depressive episodes
+Length_illness_mood
+Comorbidities.GAD
+Comorbidities.PD
+Comorbidities.Agoraphobia
+Comorbidities.ADHD
+Curr_Antidep
+Curr_Lit
+Ever_Smoked
+Currently_Smoke
+Never drinks Alcohol
+tothosp
+nmhospman - 0 mania hospitalisations
+nmhospdep - 0 depression hospitalisations
+Mother_Edu_lt12
+Father_Edu_lt12
+Obesity
+Severe_obesity
+Non-Hispanic White or Caucasian
+Black or African American
+Hispanic or Latino
+BIS_BAS_BIS_parent
+BIS_BAS_reward_parent
+Birthweight <5.5 lb (LBW)
