@@ -42,7 +42,7 @@ services:
       # - NCCL_DEBUG=TRACE          # NCCL communication debugging
       # - VLLM_TRACE_FUNCTION=1     # Trace all function calls (100x+ slower!)
     ports:
-      - "8000:8000"
+      - "0.0.0.0:8000:8000"  # Bind to all interfaces for network access
     volumes:
       - hf_cache:/root/.cache/huggingface
     # Proper GPU resource reservation for Docker Compose
@@ -102,7 +102,7 @@ services:
       # - VLLM_TRACE_FUNCTION=1     # Trace all function calls (100x+ slower!)
     ports:
       # Expose embeddings server on a different host port
-      - "8001:8000"
+      - "0.0.0.0:8001:8000"  # Bind to all interfaces for network access
     volumes:
       - hf_cache:/root/.cache/huggingface
     # Proper GPU resource reservation for Docker Compose

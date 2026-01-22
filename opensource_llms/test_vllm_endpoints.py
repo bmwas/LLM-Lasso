@@ -6,7 +6,7 @@ This script tests both the chat completion and embedding endpoints
 to verify the Docker services are running correctly.
 
 Usage:
-    # From project root (after sourcing .env or setting VLLM_API_KEY)
+    # From project root (automatically loads .env)
     python opensource_llms/test_vllm_endpoints.py
     
     # Or with explicit API key
@@ -17,9 +17,50 @@ import os
 import sys
 import json
 import time
+from pathlib import Path
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
+
+def load_env_file():
+    """Load environment variables from .env file in project root."""
+    # Find .env file - check current dir and parent dirs
+    current = Path.cwd()
+    env_paths = [
+        current / ".env",
+        current.parent / ".env",
+        Path(__file__).parent.parent / ".env",  # Relative to script location
+    ]
+    
+    for env_path in env_paths:
+        if env_path.exists():
+            print(f"Loading environment from: {env_path}")
+            with open(env_path, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith("#"):
+                        continue
+                    # Parse KEY=VALUE (handle quotes)
+                    if "=" in line:
+                        key, _, value = line.partition("=")
+                        key = key.strip()
+                        value = value.strip()
+                        # Remove surrounding quotes if present
+                        if (value.startswith('"') and value.endswith('"')) or \
+                           (value.startswith("'") and value.endswith("'")):
+                            value = value[1:-1]
+                        # Only set if not already in environment
+                        if key not in os.environ:
+                            os.environ[key] = value
+            return True
+    
+    print("WARNING: No .env file found. Looking in:", [str(p) for p in env_paths])
+    return False
+
+
+# Load .env file before reading configuration
+load_env_file()
 
 # Configuration (can be overridden via environment variables)
 CHAT_BASE_URL = os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
