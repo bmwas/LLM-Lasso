@@ -277,11 +277,11 @@ Before deploying the Docker services, ensure you have:
 Navigate to the project root and start the services:
 
 ```bash
-# Start both services
-docker compose -f opensource_llms/docker-compose.yml up
+# Start both services (run from project root)
+docker compose --env-file .env -f opensource_llms/docker-compose.yml up
 
 # Or start with build (if you've made changes)
-docker compose -f opensource_llms/docker-compose.yml up --build
+docker compose --env-file .env -f opensource_llms/docker-compose.yml up --build
 ```
 
 The first launch will download the models from HuggingFace (~30GB+ total), which may take considerable time depending on your internet connection. Model files are cached in a Docker volume for subsequent starts.
@@ -290,7 +290,7 @@ The first launch will download the models from HuggingFace (~30GB+ total), which
 
 1. **Check container status:**
    ```bash
-   docker compose -f opensource_llms/docker-compose.yml ps
+   docker compose --env-file .env -f opensource_llms/docker-compose.yml ps
    ```
    
    Expected output (after models load):
@@ -349,19 +349,19 @@ The Docker Compose configuration includes extensive debug logging for troublesho
 
 ```bash
 # View all logs (follow mode)
-docker compose -f opensource_llms/docker-compose.yml logs -f
+docker compose --env-file .env -f opensource_llms/docker-compose.yml logs -f
 
 # View only chat service logs
-docker compose -f opensource_llms/docker-compose.yml logs -f vllm_chat
+docker compose --env-file .env -f opensource_llms/docker-compose.yml logs -f vllm_chat
 
 # View only embedding service logs
-docker compose -f opensource_llms/docker-compose.yml logs -f vllm_embed
+docker compose --env-file .env -f opensource_llms/docker-compose.yml logs -f vllm_embed
 
 # View last 100 lines of logs
-docker compose -f opensource_llms/docker-compose.yml logs --tail=100
+docker compose --env-file .env -f opensource_llms/docker-compose.yml logs --tail=100
 
 # Save logs to file for analysis
-docker compose -f opensource_llms/docker-compose.yml logs > vllm_debug.log 2>&1
+docker compose --env-file .env -f opensource_llms/docker-compose.yml logs > vllm_debug.log 2>&1
 ```
 
 **Debug logging includes:**
@@ -412,13 +412,13 @@ python scripts/run_pbd_llm_lasso.py \
 
 ```bash
 # Stop services (keeps volumes)
-docker compose -f opensource_llms/docker-compose.yml down
+docker compose --env-file .env -f opensource_llms/docker-compose.yml down
 
 # Stop services and remove volumes (deletes cached models!)
-docker compose -f opensource_llms/docker-compose.yml down -v
+docker compose --env-file .env -f opensource_llms/docker-compose.yml down -v
 
 # Stop a specific service
-docker compose -f opensource_llms/docker-compose.yml stop vllm_chat
+docker compose --env-file .env -f opensource_llms/docker-compose.yml stop vllm_chat
 ```
 
 ### Troubleshooting Docker

@@ -9,16 +9,16 @@
 # SETUP:
 #   1. Copy .env.example to .env in project root: cp opensource_llms/.env.example .env
 #   2. Edit .env and add your HUGGINGFACE_TOKEN and VLLM_API_KEY
-#   3. Run: docker compose -f opensource_llms/docker-compose.yml up
+#   3. Run: docker compose --env-file .env -f opensource_llms/docker-compose.yml up
 #
 # ENDPOINTS (OpenAI-compatible):
 #   - Chat completions: http://localhost:8000/v1/chat/completions
 #   - Embeddings: http://localhost:8001/v1/embeddings
 #
 # LOGS:
-#   - View all logs: docker compose -f opensource_llms/docker-compose.yml logs -f
-#   - View chat service: docker compose -f opensource_llms/docker-compose.yml logs -f vllm_chat
-#   - View embed service: docker compose -f opensource_llms/docker-compose.yml logs -f vllm_embed
+#   - View all logs: docker compose --env-file .env -f opensource_llms/docker-compose.yml logs -f
+#   - View chat service: docker compose --env-file .env -f opensource_llms/docker-compose.yml logs -f vllm_chat
+#   - View embed service: docker compose --env-file .env -f opensource_llms/docker-compose.yml logs -f vllm_embed
 
 services:
   vllm_chat:
