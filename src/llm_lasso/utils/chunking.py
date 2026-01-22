@@ -1,12 +1,18 @@
 """
 This script implements chunking for the .json file scraped down from Omim
 and for PDF documents extracted via pymupdf4llm.
+
+Includes optional reference section filtering at the chunk level.
 """
 
 import json
-from typing import Optional
+import logging
+from typing import Optional, Tuple, Dict, Any, List
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from tqdm import tqdm
+
+# Set up module logger
+logger = logging.getLogger("pdf_rag.chunking")
 
 # Chunking omim json docs by attaching gene names and other metadata as metadata tags.
 def chunk_by_gene(json_file, output_file, chunk_size=1000, chunk_overlap=200):
@@ -97,8 +103,9 @@ def chunk_pdf_documents(
     documents: list[dict],
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
-    output_file: Optional[str] = None
-) -> list[dict]:
+    output_file: Optional[str] = None,
+    filter_references: bool = True
+) -> Tuple[list[dict], Dict[str, Any]]:
     """
     Chunk PDF documents extracted by pdf_RAG_process into smaller pieces for vectorstore ingestion.
     
@@ -108,9 +115,12 @@ def chunk_pdf_documents(
         chunk_size: Maximum size of each chunk in characters.
         chunk_overlap: Overlap between consecutive chunks.
         output_file: Optional path to save chunked output as JSON lines file.
+        filter_references: If True, filter out chunks that appear to be reference content.
     
     Returns:
-        List of chunked documents with preserved and updated metadata.
+        Tuple of:
+        - List of chunked documents with preserved and updated metadata.
+        - Dictionary with filtering statistics
     """
     # Initialize text splitter with separators appropriate for markdown/scientific text
     text_splitter = RecursiveCharacterTextSplitter(
@@ -129,7 +139,24 @@ def chunk_pdf_documents(
         ]
     )
     
+    # Import reference filter if needed
+    is_reference_chunk = None
+    if filter_references:
+        try:
+            from llm_lasso.utils.reference_filter import is_reference_chunk as _is_reference_chunk
+            is_reference_chunk = _is_reference_chunk
+        except ImportError:
+            logger.warning("reference_filter module not available, skipping chunk-level reference filtering")
+            filter_references = False
+    
     chunks = []
+    filter_stats = {
+        'total_chunks_created': 0,
+        'chunks_filtered': 0,
+        'chunks_kept': 0,
+        'bytes_filtered': 0,
+        'filtered_chunks': []
+    }
     
     for doc in tqdm(documents, desc="Chunking PDF documents"):
         content = doc.get("content", "")
@@ -144,7 +171,29 @@ def chunk_pdf_documents(
         for chunk_idx, chunk in enumerate(text_chunks):
             if not chunk.strip():
                 continue
-                
+            
+            filter_stats['total_chunks_created'] += 1
+            
+            # Check if this chunk is reference content
+            if filter_references and is_reference_chunk is not None:
+                is_ref, reason = is_reference_chunk(chunk.strip())
+                if is_ref:
+                    filter_stats['chunks_filtered'] += 1
+                    filter_stats['bytes_filtered'] += len(chunk.encode('utf-8'))
+                    filter_stats['filtered_chunks'].append({
+                        'source': metadata.get('filename', 'unknown'),
+                        'page': metadata.get('page', 'unknown'),
+                        'chunk_index': chunk_idx,
+                        'reason': reason
+                    })
+                    logger.debug(
+                        f"Filtered chunk {chunk_idx} from {metadata.get('filename', 'unknown')} "
+                        f"page {metadata.get('page', '?')}: {reason}"
+                    )
+                    continue  # Skip this chunk
+            
+            filter_stats['chunks_kept'] += 1
+            
             # Create new metadata with chunk information
             chunk_metadata = metadata.copy()
             chunk_metadata["chunk_index"] = chunk_idx
@@ -160,7 +209,13 @@ def chunk_pdf_documents(
                 "metadata": chunk_metadata
             })
     
+    # Print summary
     print(f"Created {len(chunks)} chunks from {len(documents)} document(s)")
+    if filter_references and filter_stats['chunks_filtered'] > 0:
+        print(
+            f"Chunk-level reference filtering: {filter_stats['chunks_filtered']}/{filter_stats['total_chunks_created']} "
+            f"chunks filtered ({100*filter_stats['chunks_filtered']/max(filter_stats['total_chunks_created'],1):.1f}%)"
+        )
     
     # Optionally save to file
     if output_file:
@@ -169,7 +224,7 @@ def chunk_pdf_documents(
                 f_out.write(json.dumps(chunk) + "\n")
         print(f"Chunked data saved to {output_file}")
     
-    return chunks
+    return chunks, filter_stats
 
 
 def _extract_section_header(text: str) -> Optional[str]:

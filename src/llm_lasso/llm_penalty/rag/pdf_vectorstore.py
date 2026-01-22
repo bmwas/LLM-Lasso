@@ -103,7 +103,8 @@ def create_pdf_vectorstore(
     chunk_overlap: int = 200,
     page_chunks: bool = True,
     embedding_model: Optional[OpenAIEmbeddings] = None,
-    collection_name: str = "pdf_documents"
+    collection_name: str = "pdf_documents",
+    filter_references: bool = True
 ) -> Chroma:
     """
     Create a ChromaDB vectorstore from PDF documents in a directory.
@@ -116,6 +117,7 @@ def create_pdf_vectorstore(
         page_chunks: If True, extract text page by page before chunking.
         embedding_model: OpenAI embeddings model. If None, creates default.
         collection_name: Name for the ChromaDB collection.
+        filter_references: If True, filter out reference/bibliography sections from indexing.
     
     Returns:
         Chroma vectorstore populated with PDF document chunks.
@@ -130,6 +132,7 @@ def create_pdf_vectorstore(
     logger.debug(f"  chunk_overlap: {chunk_overlap}")
     logger.debug(f"  page_chunks: {page_chunks}")
     logger.debug(f"  collection_name: {collection_name}")
+    logger.debug(f"  filter_references: {filter_references}")
     logger.debug(f"  embedding_model provided: {embedding_model is not None}")
     
     total_start = time.time()
@@ -154,18 +157,30 @@ def create_pdf_vectorstore(
     
     # Load and extract text from PDFs
     logger.info(f"[Op:{operation_id}] Loading PDFs from {pdf_directory}...")
+    if filter_references:
+        logger.info(f"[Op:{operation_id}] Reference filtering: ENABLED (page-level)")
     print(f"Loading PDFs from {pdf_directory}...")
     
     load_start = time.time()
-    raw_documents = load_pdfs_from_directory(
+    raw_documents, page_filter_stats = load_pdfs_from_directory(
         pdf_directory,
         page_chunks=page_chunks,
-        recursive=False
+        recursive=False,
+        filter_references=filter_references
     )
     load_time = time.time() - load_start
     
     logger.info(f"[Op:{operation_id}] PDF loading completed in {load_time:.2f}s")
     logger.info(f"[Op:{operation_id}] Extracted {len(raw_documents)} raw document segments")
+    
+    # Log page-level filtering statistics
+    if filter_references and page_filter_stats.get('total_pages_filtered', 0) > 0:
+        total_pages = page_filter_stats.get('total_pages_extracted', 0) + page_filter_stats.get('total_pages_filtered', 0)
+        logger.info(
+            f"[Op:{operation_id}] Page-level reference filtering: "
+            f"{page_filter_stats['total_pages_filtered']}/{total_pages} pages filtered "
+            f"({100*page_filter_stats['total_pages_filtered']/max(total_pages,1):.1f}%)"
+        )
     
     if not raw_documents:
         logger.error(f"[Op:{operation_id}] No documents extracted from {pdf_directory}")
@@ -183,18 +198,29 @@ def create_pdf_vectorstore(
     
     # Chunk the documents
     logger.info(f"[Op:{operation_id}] Chunking documents (size={chunk_size}, overlap={chunk_overlap})...")
+    if filter_references:
+        logger.info(f"[Op:{operation_id}] Reference filtering: ENABLED (chunk-level)")
     print("Chunking documents...")
     
     chunk_start = time.time()
-    chunked_documents = chunk_pdf_documents(
+    chunked_documents, chunk_filter_stats = chunk_pdf_documents(
         raw_documents,
         chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_overlap=chunk_overlap,
+        filter_references=filter_references
     )
     chunk_time = time.time() - chunk_start
     
     logger.info(f"[Op:{operation_id}] Chunking completed in {chunk_time:.2f}s")
     logger.info(f"[Op:{operation_id}] Created {len(chunked_documents)} chunks from {len(raw_documents)} segments")
+    
+    # Log chunk-level filtering statistics
+    if filter_references and chunk_filter_stats.get('chunks_filtered', 0) > 0:
+        logger.info(
+            f"[Op:{operation_id}] Chunk-level reference filtering: "
+            f"{chunk_filter_stats['chunks_filtered']}/{chunk_filter_stats['total_chunks_created']} chunks filtered "
+            f"({100*chunk_filter_stats['chunks_filtered']/max(chunk_filter_stats['total_chunks_created'],1):.1f}%)"
+        )
     
     if not chunked_documents:
         logger.error(f"[Op:{operation_id}] No chunks created from documents")
@@ -399,7 +425,8 @@ def get_or_create_pdf_vectorstore(
     page_chunks: bool = True,
     embedding_model: Optional[OpenAIEmbeddings] = None,
     collection_name: str = "pdf_documents",
-    force_recreate: bool = False
+    force_recreate: bool = False,
+    filter_references: bool = True
 ) -> Chroma:
     """
     Get existing vectorstore or create a new one if it doesn't exist.
@@ -413,6 +440,7 @@ def get_or_create_pdf_vectorstore(
         embedding_model: OpenAI embeddings model. If None, creates default.
         collection_name: Name for the ChromaDB collection.
         force_recreate: If True, recreate vectorstore even if it exists.
+        filter_references: If True, filter out reference/bibliography sections from indexing.
     
     Returns:
         Chroma vectorstore.
@@ -422,6 +450,7 @@ def get_or_create_pdf_vectorstore(
     logger.debug(f"[Op:{operation_id}] pdf_directory: {pdf_directory}")
     logger.debug(f"[Op:{operation_id}] persist_directory: {persist_directory}")
     logger.debug(f"[Op:{operation_id}] force_recreate: {force_recreate}")
+    logger.debug(f"[Op:{operation_id}] filter_references: {filter_references}")
     
     # Initialize embeddings
     if embedding_model is None:
@@ -466,7 +495,8 @@ def get_or_create_pdf_vectorstore(
         chunk_overlap=chunk_overlap,
         page_chunks=page_chunks,
         embedding_model=embedding_model,
-        collection_name=collection_name
+        collection_name=collection_name,
+        filter_references=filter_references
     )
 
 

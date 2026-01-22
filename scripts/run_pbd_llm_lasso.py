@@ -583,6 +583,123 @@ def generate_llm_penalties(
     }
 
 
+def save_rag_retrieved_documents(
+    feature_names: List[str],
+    category: str,
+    pdf_vectorstore,
+    pdf_rag_num_docs: int,
+    save_dir: str,
+    logger: logging.Logger
+) -> Dict[str, Any]:
+    """
+    Retrieve and save all RAG documents with their sources to a JSON file.
+    
+    Args:
+        feature_names: List of feature names used for queries
+        category: Category/domain context
+        pdf_vectorstore: ChromaDB vectorstore with PDF embeddings
+        pdf_rag_num_docs: Number of documents to retrieve per query
+        save_dir: Directory to save the output
+        logger: Logger instance
+    
+    Returns:
+        Dictionary with retrieved documents information
+    """
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("SAVING RAG RETRIEVED DOCUMENTS")
+    logger.info("=" * 60)
+    
+    if pdf_vectorstore is None:
+        logger.warning("No PDF vectorstore available - skipping RAG document saving")
+        return {}
+    
+    retriever = pdf_vectorstore.as_retriever(search_kwargs={"k": pdf_rag_num_docs})
+    
+    rag_documents = {
+        "metadata": {
+            "category": category,
+            "num_features_queried": len(feature_names),
+            "docs_per_query": pdf_rag_num_docs,
+            "timestamp": datetime.now().isoformat()
+        },
+        "queries": {},
+        "all_documents": []
+    }
+    
+    seen_contents = set()
+    doc_id = 1
+    
+    for feature in feature_names:
+        query = f"Information about {feature} related to {category}"
+        try:
+            docs = retriever.get_relevant_documents(query)[:pdf_rag_num_docs]
+            
+            feature_docs = []
+            for doc in docs:
+                content_preview = doc.page_content[:500] if len(doc.page_content) > 500 else doc.page_content
+                content_hash = hash(content_preview)
+                
+                doc_info = {
+                    "doc_id": f"doc_{doc_id}",
+                    "source_file": doc.metadata.get("filename", doc.metadata.get("source", "Unknown")),
+                    "page": doc.metadata.get("page", "N/A"),
+                    "chunk_index": doc.metadata.get("chunk_index", "N/A"),
+                    "content_preview": content_preview + ("..." if len(doc.page_content) > 500 else ""),
+                    "full_content": doc.page_content,
+                    "content_length": len(doc.page_content),
+                    "metadata": {k: str(v) for k, v in doc.metadata.items()}
+                }
+                
+                feature_docs.append(doc_info)
+                
+                # Add to all_documents if not seen before
+                if content_hash not in seen_contents:
+                    seen_contents.add(content_hash)
+                    rag_documents["all_documents"].append(doc_info)
+                    doc_id += 1
+            
+            rag_documents["queries"][feature] = {
+                "query": query,
+                "num_docs_retrieved": len(feature_docs),
+                "documents": feature_docs
+            }
+            
+        except Exception as e:
+            logger.warning(f"Error retrieving docs for {feature}: {e}")
+            rag_documents["queries"][feature] = {
+                "query": query,
+                "num_docs_retrieved": 0,
+                "documents": [],
+                "error": str(e)
+            }
+    
+    # Summary statistics
+    rag_documents["summary"] = {
+        "total_unique_documents": len(rag_documents["all_documents"]),
+        "total_queries": len(feature_names),
+        "successful_queries": sum(1 for q in rag_documents["queries"].values() if q["num_docs_retrieved"] > 0),
+        "unique_source_files": list(set(
+            d["source_file"] for d in rag_documents["all_documents"]
+        ))
+    }
+    
+    # Save to JSON
+    rag_file = os.path.join(save_dir, "rag_retrieved_documents.json")
+    with open(rag_file, 'w') as f:
+        json.dump(rag_documents, f, indent=2, ensure_ascii=False)
+    
+    logger.info(f"Total unique documents retrieved: {rag_documents['summary']['total_unique_documents']}")
+    logger.info(f"Unique source files: {len(rag_documents['summary']['unique_source_files'])}")
+    for src in rag_documents['summary']['unique_source_files'][:5]:  # Show first 5
+        logger.info(f"  - {src}")
+    if len(rag_documents['summary']['unique_source_files']) > 5:
+        logger.info(f"  ... and {len(rag_documents['summary']['unique_source_files']) - 5} more")
+    logger.info(f"RAG documents saved to: {rag_file}")
+    
+    return rag_documents
+
+
 # ==================== Lasso Training ====================
 
 # Check if adelie is available
@@ -1020,6 +1137,401 @@ def generate_evaluation_plots(
     return metrics
 
 
+def generate_coefficient_plot(
+    feature_names: List[str],
+    coefficients: np.ndarray,
+    mean_coefficients: np.ndarray,
+    std_coefficients: np.ndarray,
+    selection_frequency: np.ndarray,
+    save_dir: str,
+    logger: logging.Logger
+) -> None:
+    """
+    Generate publication-quality bar plots of Lasso coefficients.
+    
+    Creates multiple visualizations:
+    1. Final model coefficients (non-zero only) - sorted by signed value
+    2. All coefficients with selection frequency
+    3. Coefficient stability plot (mean ± std from LOO)
+    
+    Args:
+        feature_names: List of feature names
+        coefficients: Final model coefficients
+        mean_coefficients: Mean coefficients from LOO folds
+        std_coefficients: Std of coefficients from LOO folds
+        selection_frequency: Proportion of folds where each feature was selected
+        save_dir: Directory to save plots
+        logger: Logger instance
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from matplotlib.patches import Patch
+    
+    logger.info("")
+    logger.info("Generating coefficient plots...")
+    
+    # Publication-quality settings - enhanced for high quality
+    plt.rcParams.update({
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Arial', 'DejaVu Sans', 'Helvetica'],
+        'font.size': 11,
+        'axes.titlesize': 14,
+        'axes.labelsize': 12,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'legend.fontsize': 10,
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.2,
+        'axes.linewidth': 1.2,
+        'axes.spines.top': False,
+        'axes.spines.right': False,
+    })
+    
+    # Create DataFrame for easier manipulation
+    coef_df = pd.DataFrame({
+        'Feature': feature_names,
+        'Coefficient': coefficients,
+        'Mean_Coefficient': mean_coefficients,
+        'Std_Coefficient': std_coefficients,
+        'Selection_Frequency': selection_frequency
+    })
+    
+    coef_df['Abs_Coefficient'] = np.abs(coef_df['Coefficient'])
+    
+    # =========================================================================
+    # PLOT 1: Non-zero coefficients bar plot - SORTED BY SIGNED VALUE
+    # =========================================================================
+    nonzero_df = coef_df[coef_df['Coefficient'] != 0].copy()
+    # Sort by signed coefficient value (ascending: most negative at bottom, most positive at top)
+    nonzero_df = nonzero_df.sort_values('Coefficient', ascending=True)
+    
+    if len(nonzero_df) > 0:
+        n_features = len(nonzero_df)
+        fig_height = max(6, n_features * 0.45)  # More space per bar
+        fig, ax = plt.subplots(figsize=(12, fig_height))
+        
+        # Color by sign
+        colors = ['#E74C3C' if c < 0 else '#27AE60' for c in nonzero_df['Coefficient']]
+        
+        y_positions = range(n_features)
+        bars = ax.barh(
+            y=y_positions,
+            width=nonzero_df['Coefficient'],
+            color=colors,
+            edgecolor='#2C3E50',
+            linewidth=0.8,
+            alpha=0.9,
+            height=0.7
+        )
+        
+        # Calculate x-axis limits with extra padding for labels
+        coef_min = nonzero_df['Coefficient'].min()
+        coef_max = nonzero_df['Coefficient'].max()
+        coef_range = coef_max - coef_min
+        
+        # Add substantial padding for labels (30% on each side)
+        x_min = coef_min - 0.35 * abs(coef_min) if coef_min < 0 else -0.1 * coef_range
+        x_max = coef_max + 0.35 * abs(coef_max) if coef_max > 0 else 0.1 * coef_range
+        ax.set_xlim(x_min, x_max)
+        
+        # Add value labels OUTSIDE the bars with proper positioning
+        for i, (idx, row) in enumerate(nonzero_df.iterrows()):
+            val = row['Coefficient']
+            if val >= 0:
+                # Positive: label to the right of bar
+                label_x = val + 0.03 * coef_range
+                ha = 'left'
+            else:
+                # Negative: label to the left of bar
+                label_x = val - 0.03 * coef_range
+                ha = 'right'
+            
+            ax.text(label_x, i, f'{val:.3f}', 
+                    va='center', ha=ha, fontsize=9, fontweight='bold',
+                    color='#2C3E50')
+        
+        ax.set_yticks(y_positions)
+        ax.set_yticklabels(nonzero_df['Feature'], fontsize=10)
+        ax.axvline(x=0, color='#2C3E50', linewidth=1.5, linestyle='-', zorder=1)
+        ax.set_xlabel('Coefficient Value', fontweight='bold', fontsize=12)
+        ax.set_title('Lasso Coefficients (Non-Zero Features)\nSorted by Coefficient Value', 
+                     fontweight='bold', fontsize=14, pad=15)
+        
+        # Add legend with better positioning
+        legend_elements = [
+            Patch(facecolor='#27AE60', edgecolor='#2C3E50', label='Positive (↑ risk)', linewidth=0.8),
+            Patch(facecolor='#E74C3C', edgecolor='#2C3E50', label='Negative (↓ risk)', linewidth=0.8)
+        ]
+        ax.legend(handles=legend_elements, loc='lower right', framealpha=0.95, 
+                  edgecolor='#BDC3C7', fancybox=True)
+        
+        # Add subtle grid
+        ax.xaxis.grid(True, linestyle='--', alpha=0.4, color='#BDC3C7')
+        ax.set_axisbelow(True)
+        
+        # Add y-axis padding
+        ax.set_ylim(-0.5, n_features - 0.5)
+        
+        plt.tight_layout()
+        coef_plot_file = os.path.join(save_dir, "coefficients_nonzero.png")
+        plt.savefig(coef_plot_file, dpi=300, bbox_inches='tight', facecolor='white', 
+                    edgecolor='none', pad_inches=0.3)
+        plt.close()
+        logger.info(f"  Saved: {coef_plot_file}")
+    else:
+        logger.warning("  No non-zero coefficients to plot!")
+    
+    # =========================================================================
+    # PLOT 2: All coefficients with selection frequency - SORTED BY SIGNED VALUE
+    # =========================================================================
+    # Sort by signed mean coefficient
+    coef_df_mean_sorted = coef_df.sort_values('Mean_Coefficient', ascending=True)
+    n_all_features = len(coef_df_mean_sorted)
+    
+    fig, axes = plt.subplots(1, 2, figsize=(16, max(8, n_all_features * 0.38)), 
+                              gridspec_kw={'width_ratios': [3.5, 1], 'wspace': 0.08})
+    
+    # Left panel: Mean coefficients with error bars
+    ax1 = axes[0]
+    colors = ['#E74C3C' if c < 0 else '#27AE60' if c > 0 else '#95A5A6' 
+              for c in coef_df_mean_sorted['Mean_Coefficient']]
+    
+    y_positions = range(n_all_features)
+    ax1.barh(
+        y=y_positions,
+        width=coef_df_mean_sorted['Mean_Coefficient'],
+        xerr=coef_df_mean_sorted['Std_Coefficient'],
+        color=colors,
+        edgecolor='#2C3E50',
+        linewidth=0.6,
+        alpha=0.85,
+        capsize=3,
+        height=0.7,
+        error_kw={'elinewidth': 1.2, 'capthick': 1.2, 'ecolor': '#7F8C8D'}
+    )
+    
+    ax1.set_yticks(y_positions)
+    ax1.set_yticklabels(coef_df_mean_sorted['Feature'], fontsize=9)
+    ax1.axvline(x=0, color='#2C3E50', linewidth=1.5)
+    ax1.set_xlabel('Mean Coefficient ± SD (across LOO folds)', fontweight='bold', fontsize=11)
+    ax1.set_title('Coefficient Stability', fontweight='bold', fontsize=13)
+    ax1.xaxis.grid(True, linestyle='--', alpha=0.4, color='#BDC3C7')
+    ax1.set_axisbelow(True)
+    ax1.set_ylim(-0.5, n_all_features - 0.5)
+    
+    # Extend x-axis for error bars
+    mean_min = (coef_df_mean_sorted['Mean_Coefficient'] - coef_df_mean_sorted['Std_Coefficient']).min()
+    mean_max = (coef_df_mean_sorted['Mean_Coefficient'] + coef_df_mean_sorted['Std_Coefficient']).max()
+    mean_range = mean_max - mean_min
+    ax1.set_xlim(mean_min - 0.15 * abs(mean_range), mean_max + 0.15 * abs(mean_range))
+    
+    # Right panel: Selection frequency with colormap
+    ax2 = axes[1]
+    freq_values = coef_df_mean_sorted['Selection_Frequency'].values
+    
+    # Use a diverging colormap based on frequency
+    cmap = plt.cm.RdYlGn
+    freq_colors = [cmap(f) for f in freq_values]
+    
+    bars2 = ax2.barh(
+        y=y_positions,
+        width=freq_values,
+        color=freq_colors,
+        edgecolor='#2C3E50',
+        linewidth=0.4,
+        alpha=0.9,
+        height=0.7
+    )
+    
+    # Add frequency labels inside or outside bars
+    for i, freq in enumerate(freq_values):
+        if freq > 0.15:
+            ax2.text(freq - 0.02, i, f'{freq*100:.0f}%', va='center', ha='right', 
+                    fontsize=7, fontweight='bold', color='white')
+        else:
+            ax2.text(freq + 0.02, i, f'{freq*100:.0f}%', va='center', ha='left', 
+                    fontsize=7, fontweight='bold', color='#2C3E50')
+    
+    ax2.set_yticks(y_positions)
+    ax2.set_yticklabels([])
+    ax2.set_xlabel('Selection\nFrequency', fontweight='bold', fontsize=10)
+    ax2.set_xlim(0, 1.05)
+    ax2.axvline(x=0.5, color='#E74C3C', linewidth=1.5, linestyle='--', alpha=0.7)
+    ax2.xaxis.grid(True, linestyle='--', alpha=0.4, color='#BDC3C7')
+    ax2.set_axisbelow(True)
+    ax2.set_ylim(-0.5, n_all_features - 0.5)
+    ax2.set_title('Selection\nFrequency', fontweight='bold', fontsize=11)
+    
+    plt.suptitle('Feature Coefficients and Selection Stability (LOO Cross-Validation)', 
+                 fontweight='bold', fontsize=15, y=1.01)
+    
+    plt.tight_layout()
+    stability_plot_file = os.path.join(save_dir, "coefficients_stability.png")
+    plt.savefig(stability_plot_file, dpi=300, bbox_inches='tight', facecolor='white',
+                edgecolor='none', pad_inches=0.3)
+    plt.close()
+    logger.info(f"  Saved: {stability_plot_file}")
+    
+    # =========================================================================
+    # PLOT 3: Top features by importance - SORTED BY SIGNED VALUE
+    # =========================================================================
+    top_n = min(20, len(feature_names))  # Show top 20 or all if fewer
+    top_features = coef_df.nlargest(top_n, 'Abs_Coefficient').copy()
+    # Sort by signed coefficient value
+    top_features = top_features.sort_values('Coefficient', ascending=True)
+    
+    n_top = len(top_features)
+    fig, ax = plt.subplots(figsize=(12, max(6, n_top * 0.5)))
+    
+    colors = ['#E74C3C' if c < 0 else '#27AE60' for c in top_features['Coefficient']]
+    
+    y_positions = range(n_top)
+    bars = ax.barh(
+        y=y_positions,
+        width=top_features['Coefficient'],
+        color=colors,
+        edgecolor='#2C3E50',
+        linewidth=0.8,
+        alpha=0.9,
+        height=0.7
+    )
+    
+    # Calculate x-axis limits
+    top_min = top_features['Coefficient'].min()
+    top_max = top_features['Coefficient'].max()
+    top_range = top_max - top_min
+    
+    x_min = top_min - 0.35 * abs(top_min) if top_min < 0 else -0.1 * top_range
+    x_max = top_max + 0.35 * abs(top_max) if top_max > 0 else 0.1 * top_range
+    ax.set_xlim(x_min, x_max)
+    
+    # Add coefficient labels and selection frequency
+    for i, (idx, row) in enumerate(top_features.iterrows()):
+        coef = row['Coefficient']
+        freq = row['Selection_Frequency']
+        
+        # Coefficient value label
+        if coef >= 0:
+            label_x = coef + 0.03 * top_range
+            ha = 'left'
+        else:
+            label_x = coef - 0.03 * top_range
+            ha = 'right'
+        
+        ax.text(label_x, i, f'{coef:.3f}', va='center', ha=ha, 
+                fontsize=9, fontweight='bold', color='#2C3E50')
+        
+        # Selection frequency as small annotation on the right margin
+        ax.annotate(f'({freq*100:.0f}%)', xy=(x_max, i), 
+                    fontsize=8, color='#7F8C8D', style='italic',
+                    va='center', ha='left')
+    
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(top_features['Feature'], fontsize=10)
+    ax.axvline(x=0, color='#2C3E50', linewidth=1.5)
+    ax.set_xlabel('Coefficient Value', fontweight='bold', fontsize=12)
+    ax.set_title(f'Top {n_top} Features by Coefficient Magnitude\nSorted by Coefficient Value (selection freq. in parentheses)', 
+                 fontweight='bold', fontsize=14, pad=15)
+    
+    # Legend
+    legend_elements = [
+        Patch(facecolor='#27AE60', edgecolor='#2C3E50', label='Positive Effect (↑ risk)', linewidth=0.8),
+        Patch(facecolor='#E74C3C', edgecolor='#2C3E50', label='Negative Effect (↓ risk)', linewidth=0.8)
+    ]
+    ax.legend(handles=legend_elements, loc='lower right', framealpha=0.95, 
+              edgecolor='#BDC3C7', fancybox=True)
+    ax.xaxis.grid(True, linestyle='--', alpha=0.4, color='#BDC3C7')
+    ax.set_axisbelow(True)
+    ax.set_ylim(-0.5, n_top - 0.5)
+    
+    plt.tight_layout()
+    top_coef_file = os.path.join(save_dir, "coefficients_top_features.png")
+    plt.savefig(top_coef_file, dpi=300, bbox_inches='tight', facecolor='white',
+                edgecolor='none', pad_inches=0.3)
+    plt.close()
+    logger.info(f"  Saved: {top_coef_file}")
+    
+    # =========================================================================
+    # PLOT 4: Waterfall/Tornado chart - clear visualization of all coefficients
+    # =========================================================================
+    # Sort all features by signed coefficient
+    all_sorted = coef_df.sort_values('Coefficient', ascending=True)
+    n_all = len(all_sorted)
+    
+    fig, ax = plt.subplots(figsize=(14, max(10, n_all * 0.4)))
+    
+    colors = ['#E74C3C' if c < 0 else '#27AE60' if c > 0 else '#BDC3C7' 
+              for c in all_sorted['Coefficient']]
+    
+    y_positions = range(n_all)
+    bars = ax.barh(
+        y=y_positions,
+        width=all_sorted['Coefficient'],
+        color=colors,
+        edgecolor='#2C3E50',
+        linewidth=0.6,
+        alpha=0.9,
+        height=0.75
+    )
+    
+    # Calculate x-axis limits
+    all_min = all_sorted['Coefficient'].min()
+    all_max = all_sorted['Coefficient'].max()
+    all_range = max(abs(all_min), abs(all_max))
+    
+    # Symmetric x-axis with padding
+    x_limit = all_range * 1.4
+    ax.set_xlim(-x_limit, x_limit)
+    
+    # Add coefficient labels on the outside
+    for i, (idx, row) in enumerate(all_sorted.iterrows()):
+        coef = row['Coefficient']
+        if coef == 0:
+            continue
+        
+        if coef >= 0:
+            label_x = coef + 0.03 * all_range
+            ha = 'left'
+        else:
+            label_x = coef - 0.03 * all_range
+            ha = 'right'
+        
+        ax.text(label_x, i, f'{coef:.3f}', va='center', ha=ha, 
+                fontsize=8, fontweight='bold', color='#2C3E50')
+    
+    ax.set_yticks(y_positions)
+    ax.set_yticklabels(all_sorted['Feature'], fontsize=9)
+    ax.axvline(x=0, color='#2C3E50', linewidth=2, linestyle='-')
+    ax.set_xlabel('Coefficient Value', fontweight='bold', fontsize=12)
+    ax.set_title('All Feature Coefficients (Tornado Plot)\nSorted by Coefficient Value', 
+                 fontweight='bold', fontsize=14, pad=15)
+    
+    # Legend
+    legend_elements = [
+        Patch(facecolor='#27AE60', edgecolor='#2C3E50', label='Positive (↑ risk)', linewidth=0.8),
+        Patch(facecolor='#E74C3C', edgecolor='#2C3E50', label='Negative (↓ risk)', linewidth=0.8),
+        Patch(facecolor='#BDC3C7', edgecolor='#2C3E50', label='Zero (not selected)', linewidth=0.8)
+    ]
+    ax.legend(handles=legend_elements, loc='lower right', framealpha=0.95, 
+              edgecolor='#BDC3C7', fancybox=True)
+    ax.xaxis.grid(True, linestyle='--', alpha=0.4, color='#BDC3C7')
+    ax.set_axisbelow(True)
+    ax.set_ylim(-0.5, n_all - 0.5)
+    
+    plt.tight_layout()
+    tornado_file = os.path.join(save_dir, "coefficients_tornado.png")
+    plt.savefig(tornado_file, dpi=300, bbox_inches='tight', facecolor='white',
+                edgecolor='none', pad_inches=0.3)
+    plt.close()
+    logger.info(f"  Saved: {tornado_file}")
+    
+    logger.info(f"Generated 4 coefficient plots in {save_dir}")
+
+
 def run_lasso_with_loo(
     X: pd.DataFrame,
     y: pd.Series,
@@ -1196,11 +1708,29 @@ def run_lasso_with_loo(
             logger.warning(f"  LOO fold {i+1}/{n_samples}: Error - {e}, using 0.5 probability")
             prob = 0.5
         
-        # Store prediction
+        # Extract coefficients at best lambda
+        try:
+            coef_raw = model.betas[best_lambda_idx, :]
+            # Handle sparse matrix (csr_matrix) - convert to dense array
+            if hasattr(coef_raw, 'toarray'):
+                coef_at_best = np.asarray(coef_raw.toarray()).flatten()
+            elif hasattr(coef_raw, 'todense'):
+                coef_at_best = np.asarray(coef_raw.todense()).flatten()
+            else:
+                coef_at_best = np.asarray(coef_raw).flatten()
+            intercept_at_best = float(model.intercepts[best_lambda_idx])
+        except Exception as e:
+            logger.debug(f"  LOO fold {i+1}: Could not extract coefficients: {e}")
+            coef_at_best = np.zeros(X.shape[1])
+            intercept_at_best = 0.0
+        
+        # Store prediction and coefficients
         predictions.append({
             'participant_id': participant_ids[i],
             'actual_label': int(y_test.iloc[0]),
-            'predicted_probability': float(prob)
+            'predicted_probability': float(prob),
+            'coefficients': coef_at_best,
+            'intercept': float(intercept_at_best)
         })
         
         # Progress logging every 10%
@@ -1210,8 +1740,124 @@ def run_lasso_with_loo(
     loo_time = time.time() - start_time
     logger.info(f"LOO cross-validation completed in {loo_time:.2f}s")
     
-    # Create predictions DataFrame
-    predictions_df = pd.DataFrame(predictions)
+    # Extract and aggregate coefficients from all LOO folds
+    logger.info("")
+    logger.info("Extracting and aggregating model coefficients...")
+    feature_names = list(X.columns)
+    all_coefficients = np.array([p['coefficients'] for p in predictions])
+    all_intercepts = np.array([p['intercept'] for p in predictions])
+    
+    # Calculate mean and std of coefficients across folds
+    mean_coefficients = np.mean(all_coefficients, axis=0)
+    std_coefficients = np.std(all_coefficients, axis=0)
+    mean_intercept = np.mean(all_intercepts)
+    std_intercept = np.std(all_intercepts)
+    
+    # Count how many folds each feature was non-zero (selection frequency)
+    non_zero_counts = np.sum(all_coefficients != 0, axis=0)
+    selection_frequency = non_zero_counts / n_samples
+    
+    logger.info(f"  Features with non-zero mean coefficient: {np.sum(mean_coefficients != 0)}/{len(feature_names)}")
+    logger.info(f"  Features selected in >50% of folds: {np.sum(selection_frequency > 0.5)}/{len(feature_names)}")
+    
+    # Train a final model on ALL data for stable coefficient estimates
+    logger.info("Training final model on all data for stable coefficients...")
+    try:
+        X_all_scaled = scale_cols(X)
+        
+        # Apply SMOTE if enabled for final model
+        if use_smote:
+            smote_final = SMOTE(random_state=smote_random_state, k_neighbors=min(5, y.value_counts().min() - 1))
+            X_final_resampled, y_final_resampled = smote_final.fit_resample(X_all_scaled.to_numpy(), y.to_numpy())
+        else:
+            X_final_resampled = X_all_scaled.to_numpy()
+            y_final_resampled = y.to_numpy()
+        
+        glm_final = ad.glm.binomial(y=y_final_resampled, dtype=np.float64)
+        
+        # Use median lambda selection across folds via CV on all data
+        fit_final = cv_grpnet(
+            X=X_final_resampled,
+            glm=glm_final,
+            seed=42,
+            n_folds=inner_cv_folds,
+            min_ratio=0.01,
+            alpha=1.0,
+            penalty=pf,
+            n_threads=n_threads,
+            progress_bar=False
+        )
+        
+        best_lambda_final = np.argmin(fit_final.test_error)
+        
+        model_final = grpnet(
+            X=X_final_resampled,
+            glm=glm_final,
+            ddev_tol=0,
+            early_exit=False,
+            n_threads=n_threads,
+            min_ratio=0.01,
+            progress_bar=False,
+            alpha=1.0,
+            penalty=pf,
+        )
+        
+        coef_raw_final = model_final.betas[best_lambda_final, :]
+        # Handle sparse matrix (csr_matrix) - convert to dense array
+        if hasattr(coef_raw_final, 'toarray'):
+            final_coefficients = np.asarray(coef_raw_final.toarray()).flatten()
+        elif hasattr(coef_raw_final, 'todense'):
+            final_coefficients = np.asarray(coef_raw_final.todense()).flatten()
+        else:
+            final_coefficients = np.asarray(coef_raw_final).flatten()
+        final_intercept = float(model_final.intercepts[best_lambda_final])
+        logger.info(f"  Final model: {np.sum(final_coefficients != 0)} non-zero coefficients")
+    except Exception as e:
+        logger.warning(f"Could not train final model: {e}")
+        final_coefficients = mean_coefficients
+        final_intercept = mean_intercept
+    
+    # Create coefficients dictionary
+    coefficients_data = {
+        "feature_names": feature_names,
+        "final_model": {
+            "coefficients": {name: float(coef) for name, coef in zip(feature_names, final_coefficients)},
+            "intercept": float(final_intercept),
+            "n_nonzero": int(np.sum(final_coefficients != 0))
+        },
+        "loo_aggregated": {
+            "mean_coefficients": {name: float(coef) for name, coef in zip(feature_names, mean_coefficients)},
+            "std_coefficients": {name: float(std) for name, std in zip(feature_names, std_coefficients)},
+            "selection_frequency": {name: float(freq) for name, freq in zip(feature_names, selection_frequency)},
+            "mean_intercept": float(mean_intercept),
+            "std_intercept": float(std_intercept)
+        }
+    }
+    
+    # Save coefficients to JSON
+    coef_file = os.path.join(save_dir, "model_coefficients.json")
+    with open(coef_file, 'w') as f:
+        json.dump(coefficients_data, f, indent=2)
+    logger.info(f"Coefficients saved to: {coef_file}")
+    
+    # Generate coefficient bar plot
+    generate_coefficient_plot(
+        feature_names=feature_names,
+        coefficients=final_coefficients,
+        mean_coefficients=mean_coefficients,
+        std_coefficients=std_coefficients,
+        selection_frequency=selection_frequency,
+        save_dir=save_dir,
+        logger=logger
+    )
+    
+    # Create predictions DataFrame (without coefficients column for CSV)
+    predictions_for_csv = [{
+        'participant_id': p['participant_id'],
+        'actual_label': p['actual_label'],
+        'predicted_probability': p['predicted_probability']
+    } for p in predictions]
+    predictions_df = pd.DataFrame(predictions_for_csv)
     
     # Save predictions CSV
     predictions_file = os.path.join(save_dir, "loo_predictions.csv")
@@ -1632,6 +2278,17 @@ def main():
             wipe=args.wipe,
             logger=logger
         )
+        
+        # Step 6b: Save RAG retrieved documents with sources
+        if args.pdf_rag and pdf_vectorstore is not None:
+            save_rag_retrieved_documents(
+                feature_names=validated_features,
+                category=args.category,
+                pdf_vectorstore=pdf_vectorstore,
+                pdf_rag_num_docs=args.pdf_rag_num_docs,
+                save_dir=args.save_dir,
+                logger=logger
+            )
         
         # Step 7: Run Lasso with penalties
         logger.info("")

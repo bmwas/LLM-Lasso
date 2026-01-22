@@ -1,0 +1,139 @@
+# vLLM Docker Compose for Open-Source LLM and Embedding Services
+# 
+# PREREQUISITES:
+#   1. NVIDIA GPU with CUDA 12.1+
+#   2. NVIDIA Container Toolkit installed (nvidia-ctk)
+#   3. Docker Engine 24.0+ and Docker Compose v2.20+
+#   4. HuggingFace token for gated models (HF_TOKEN)
+#
+# SETUP:
+#   1. Copy .env.example to .env in project root: cp opensource_llms/.env.example .env
+#   2. Edit .env and add your HF_TOKEN and VLLM_API_KEY
+#   3. Run: docker compose -f opensource_llms/docker-compose.yml up -d
+#
+# ENDPOINTS (OpenAI-compatible):
+#   - Chat completions: http://localhost:8000/v1/chat/completions
+#   - Embeddings: http://localhost:8001/v1/embeddings
+#
+# LOGS:
+#   - View all logs: docker compose -f opensource_llms/docker-compose.yml logs -f
+#   - View chat service: docker compose -f opensource_llms/docker-compose.yml logs -f vllm_chat
+#   - View embed service: docker compose -f opensource_llms/docker-compose.yml logs -f vllm_embed
+
+services:
+  vllm_chat:
+    image: vllm/vllm-openai:v0.12.0
+    container_name: vllm_chat
+    restart: unless-stopped
+    ipc: host
+    shm_size: "32gb"
+    environment:
+      # HuggingFace token - REQUIRED for gated/private models like Qwen3
+      - HF_TOKEN=${HF_TOKEN:?HF_TOKEN is required - get one from https://huggingface.co/settings/tokens}
+      # ========== EXTENSIVE LOGGING FOR DEBUGGING ==========
+      # Set logging level to DEBUG for verbose output
+      - VLLM_LOGGING_LEVEL=DEBUG
+      # Log statistics every second (queue states, cache hits, etc.)
+      - VLLM_LOG_STATS_INTERVAL=1
+      # Uncomment below for even more debugging (WARNING: significantly impacts performance)
+      # - CUDA_LAUNCH_BLOCKING=1    # Identify problematic CUDA kernels
+      # - NCCL_DEBUG=TRACE          # NCCL communication debugging
+      # - VLLM_TRACE_FUNCTION=1     # Trace all function calls (100x+ slower!)
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    # Proper GPU resource reservation for Docker Compose
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    # Health check - vLLM exposes /health endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 300s  # Large models take time to load (5 minutes)
+    command:
+      [
+        "--host", "0.0.0.0",
+        "--port", "8000",
+
+        "--model", "Qwen/Qwen3-30B-A3B-Thinking-2507-FP8",
+        "--served-model-name", "qwen3-thinking",
+
+        "--dtype", "auto",
+
+        # Keep context sane to protect VRAM while running a second instance
+        "--max-model-len", "32768",
+
+        # Split VRAM between the two vLLM instances (per-instance limiter)
+        "--gpu-memory-utilization", "0.78",
+
+        # Optional simple auth (use same key for both services)
+        "--api-key", "${VLLM_API_KEY:-EMPTY}"
+      ]
+
+  vllm_embed:
+    image: vllm/vllm-openai:v0.12.0
+    container_name: vllm_embed
+    restart: unless-stopped
+    ipc: host
+    shm_size: "16gb"
+    environment:
+      # HuggingFace token - REQUIRED for gated/private models
+      - HF_TOKEN=${HF_TOKEN:?HF_TOKEN is required - get one from https://huggingface.co/settings/tokens}
+      # ========== EXTENSIVE LOGGING FOR DEBUGGING ==========
+      # Set logging level to DEBUG for verbose output
+      - VLLM_LOGGING_LEVEL=DEBUG
+      # Log statistics every second (queue states, cache hits, etc.)
+      - VLLM_LOG_STATS_INTERVAL=1
+      # Uncomment below for even more debugging (WARNING: significantly impacts performance)
+      # - CUDA_LAUNCH_BLOCKING=1    # Identify problematic CUDA kernels
+      # - NCCL_DEBUG=TRACE          # NCCL communication debugging
+      # - VLLM_TRACE_FUNCTION=1     # Trace all function calls (100x+ slower!)
+    ports:
+      # Expose embeddings server on a different host port
+      - "8001:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+    # Proper GPU resource reservation for Docker Compose
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
+    # Health check - vLLM exposes /health endpoint
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # Embedding model loads faster than chat model
+    command:
+      [
+        "--host", "0.0.0.0",
+        "--port", "8000",
+
+        "--model", "Qwen/Qwen3-Embedding-8B",
+        "--served-model-name", "qwen3-embed",
+
+        # Embedding-mode serving (pooling runner)
+        "--runner", "pooling",
+
+        "--dtype", "auto",
+        "--max-model-len", "8192",
+
+        "--gpu-memory-utilization", "0.18",
+        "--api-key", "${VLLM_API_KEY:-EMPTY}"
+      ]
+
+volumes:
+  hf_cache:
+    name: vllm_hf_cache
