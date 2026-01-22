@@ -343,6 +343,34 @@ The first launch will download the models from HuggingFace (~30GB+ total), which
      }'
    ```
 
+6. **Run the comprehensive test script:**
+   
+   A Python test script is provided to verify both endpoints with detailed output:
+   ```bash
+   # From project root (source .env first to load VLLM_API_KEY)
+   source .env
+   python opensource_llms/test_vllm_endpoints.py
+   ```
+   
+   The script tests:
+   - Health checks for both services
+   - Model listing endpoints
+   - Chat completion with a sample prompt
+   - Embeddings with sample texts
+   
+   Expected output on success:
+   ```
+   ======================================================================
+    TEST SUMMARY
+   ======================================================================
+   
+     Total Tests: 6
+     Passed: 6
+     Failed: 0
+   
+     All tests passed! vLLM services are working correctly.
+   ```
+
 ### Viewing Logs
 
 The Docker Compose configuration includes extensive debug logging for troubleshooting:
@@ -1211,7 +1239,8 @@ LLM-Lasso/
 ├── omim_scrape/           # OMIM RAG helper functions
 ├── opensource_llms/       # Docker setup for local open-source LLMs
 │   ├── docker-compose.yml # vLLM services configuration
-│   └── .env.example       # Template for required environment variables
+│   ├── .env.example       # Template for required environment variables
+│   └── test_vllm_endpoints.py  # Test script for verifying vLLM services
 ├── playground/            # Interactive scripts
 │   ├── interactive_pdf_RAG.py    # PDF vectorstore creation/querying
 │   └── view_all_documents.py     # Vectorstore inspection utility
