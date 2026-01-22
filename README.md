@@ -263,25 +263,25 @@ Before deploying the Docker services, ensure you have:
 2. **Edit `.env`** and add your credentials:
    ```bash
    # Required - your HuggingFace token
-   HF_TOKEN=hf_your_actual_token_here
+   HUGGINGFACE_TOKEN=hf_your_actual_token_here
    
    # Optional but recommended - API key for vLLM endpoints
    # Generate with: openssl rand -hex 32
    VLLM_API_KEY=your_secure_api_key_here
    ```
 
-> **Important:** The `HF_TOKEN` is **required** for downloading the Qwen3 models. Without it, the containers will fail to start.
+> **Important:** The `HUGGINGFACE_TOKEN` is **required** for downloading the Qwen3 models. Without it, the containers will fail to start.
 
 ### Building and Launching
 
 Navigate to the project root and start the services:
 
 ```bash
-# Start both services in detached mode
-docker compose -f opensource_llms/docker-compose.yml up -d
+# Start both services
+docker compose -f opensource_llms/docker-compose.yml up
 
 # Or start with build (if you've made changes)
-docker compose -f opensource_llms/docker-compose.yml up -d --build
+docker compose -f opensource_llms/docker-compose.yml up --build
 ```
 
 The first launch will download the models from HuggingFace (~30GB+ total), which may take considerable time depending on your internet connection. Model files are cached in a Docker volume for subsequent starts.
@@ -442,7 +442,7 @@ docker compose -f opensource_llms/docker-compose.yml stop vllm_chat
 **Models download slowly or fail:**
 - HuggingFace may have rate limits; wait and retry
 - Check your internet connection and firewall settings
-- Verify HF_TOKEN is correct and has appropriate permissions
+- Verify HUGGINGFACE_TOKEN is correct and has appropriate permissions
 
 **Permission denied errors:**
 - Ensure your user is in the `docker` group: `sudo usermod -aG docker $USER`
