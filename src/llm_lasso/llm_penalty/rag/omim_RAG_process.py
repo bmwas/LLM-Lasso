@@ -3,10 +3,11 @@ This script offers two additional features to process the retrieval information 
 (1). Optional summarization of the retrieved documents.
 (2). Filtering of the retrieved documents based on the presence of gene names.
 """
+from typing import Optional
 from llm_lasso.utils.omim import get_mim_number, fetch_omim_data, parse_omim_response
 from llm_lasso.llm_penalty.llm import LLMQueryWrapperWithMemory
 from langchain.retrievers.multi_query import MultiQueryRetriever
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.base import BaseLanguageModel
 
 
 def get_summarized_gene_docs(
@@ -35,9 +36,24 @@ def get_filtered_cancer_docs_and_genes_found(
     retriever, # VectorStoreRetriver
     model: LLMQueryWrapperWithMemory,
     category: str,
-    prompt_constr = False
+    prompt_constr: bool = False,
+    llm: Optional[BaseLanguageModel] = None
 ) -> tuple[str, set[str]]:
-
+    """
+    Retrieve and filter cancer-related documents based on gene names.
+    
+    Args:
+        batch_genes: List of gene names to filter documents.
+        retriever: VectorStoreRetriever for document retrieval.
+        model: LLM wrapper for summarization.
+        category: Cancer category or domain context.
+        prompt_constr: If True, use MultiQueryRetriever for query expansion.
+        llm: Optional LLM for MultiQueryRetriever. If None and prompt_constr=True,
+             creates default ChatOpenAI. Can be any LangChain-compatible LLM.
+    
+    Returns:
+        Tuple of (summarized context string, set of gene names found).
+    """
     retrieval_prompt = f"""
     Retrieve information about {category}, especially in the context of genes' relevance to {category}.
     """
@@ -48,7 +64,10 @@ def get_filtered_cancer_docs_and_genes_found(
     """
 
     if prompt_constr:
-        llm = ChatOpenAI(temperature=0)
+        if llm is None:
+            # Default to OpenAI ChatGPT for backward compatibility
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(temperature=0)
         retriever = MultiQueryRetriever.from_llm(
             retriever=retriever, llm=llm
         )

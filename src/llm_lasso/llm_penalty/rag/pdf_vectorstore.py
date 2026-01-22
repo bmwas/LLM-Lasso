@@ -15,7 +15,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from langchain_community.vectorstores import Chroma
-from langchain_openai import OpenAIEmbeddings
+from langchain_core.embeddings import Embeddings
 from langchain.schema import Document
 
 from llm_lasso.llm_penalty.rag.pdf_RAG_process import (
@@ -102,7 +102,7 @@ def create_pdf_vectorstore(
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
     page_chunks: bool = True,
-    embedding_model: Optional[OpenAIEmbeddings] = None,
+    embedding_model: Optional[Embeddings] = None,
     collection_name: str = "pdf_documents",
     filter_references: bool = True
 ) -> Chroma:
@@ -115,7 +115,8 @@ def create_pdf_vectorstore(
         chunk_size: Maximum size of each text chunk.
         chunk_overlap: Overlap between consecutive chunks.
         page_chunks: If True, extract text page by page before chunking.
-        embedding_model: OpenAI embeddings model. If None, creates default.
+        embedding_model: LangChain Embeddings model (OpenAI, vLLM, etc.). 
+                        If None, creates default OpenAI embeddings.
         collection_name: Name for the ChromaDB collection.
         filter_references: If True, filter out reference/bibliography sections from indexing.
     
@@ -148,12 +149,15 @@ def create_pdf_vectorstore(
     # Initialize embeddings
     if embedding_model is None:
         logger.info(f"[Op:{operation_id}] Creating default OpenAI embeddings...")
+        logger.warning(f"[Op:{operation_id}] No embedding_model provided, defaulting to OpenAI. "
+                      "Consider using get_embeddings() for explicit backend selection.")
         embed_start = time.time()
+        from langchain_openai import OpenAIEmbeddings
         embedding_model = OpenAIEmbeddings()
         embed_time = time.time() - embed_start
         logger.debug(f"[Op:{operation_id}] Embeddings created in {embed_time:.2f}s")
     else:
-        logger.debug(f"[Op:{operation_id}] Using provided embedding model")
+        logger.debug(f"[Op:{operation_id}] Using provided embedding model: {type(embedding_model).__name__}")
     
     # Load and extract text from PDFs
     logger.info(f"[Op:{operation_id}] Loading PDFs from {pdf_directory}...")
@@ -320,7 +324,7 @@ def create_pdf_vectorstore(
 
 def load_pdf_vectorstore(
     persist_directory: str,
-    embedding_model: Optional[OpenAIEmbeddings] = None,
+    embedding_model: Optional[Embeddings] = None,
     collection_name: str = "pdf_documents"
 ) -> Chroma:
     """
@@ -328,7 +332,8 @@ def load_pdf_vectorstore(
     
     Args:
         persist_directory: Path to directory where ChromaDB is persisted.
-        embedding_model: OpenAI embeddings model. If None, creates default.
+        embedding_model: LangChain Embeddings model (OpenAI, vLLM, etc.).
+                        If None, creates default OpenAI embeddings.
         collection_name: Name of the ChromaDB collection.
     
     Returns:
@@ -359,7 +364,10 @@ def load_pdf_vectorstore(
     # Initialize embeddings
     if embedding_model is None:
         logger.info(f"[Op:{operation_id}] Creating default OpenAI embeddings...")
+        logger.warning(f"[Op:{operation_id}] No embedding_model provided, defaulting to OpenAI. "
+                      "Consider using get_embeddings() for explicit backend selection.")
         embed_start = time.time()
+        from langchain_openai import OpenAIEmbeddings
         embedding_model = OpenAIEmbeddings()
         embed_time = time.time() - embed_start
         logger.debug(f"[Op:{operation_id}] Embeddings created in {embed_time:.2f}s")
@@ -423,7 +431,7 @@ def get_or_create_pdf_vectorstore(
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
     page_chunks: bool = True,
-    embedding_model: Optional[OpenAIEmbeddings] = None,
+    embedding_model: Optional[Embeddings] = None,
     collection_name: str = "pdf_documents",
     force_recreate: bool = False,
     filter_references: bool = True
@@ -437,7 +445,8 @@ def get_or_create_pdf_vectorstore(
         chunk_size: Maximum size of each text chunk.
         chunk_overlap: Overlap between consecutive chunks.
         page_chunks: If True, extract text page by page before chunking.
-        embedding_model: OpenAI embeddings model. If None, creates default.
+        embedding_model: LangChain Embeddings model (OpenAI, vLLM, etc.).
+                        If None, creates default OpenAI embeddings.
         collection_name: Name for the ChromaDB collection.
         force_recreate: If True, recreate vectorstore even if it exists.
         filter_references: If True, filter out reference/bibliography sections from indexing.
@@ -455,6 +464,9 @@ def get_or_create_pdf_vectorstore(
     # Initialize embeddings
     if embedding_model is None:
         logger.info(f"[Op:{operation_id}] Creating default OpenAI embeddings...")
+        logger.warning(f"[Op:{operation_id}] No embedding_model provided, defaulting to OpenAI. "
+                      "Consider using get_embeddings() for explicit backend selection.")
+        from langchain_openai import OpenAIEmbeddings
         embedding_model = OpenAIEmbeddings()
     
     # Check if vectorstore already exists

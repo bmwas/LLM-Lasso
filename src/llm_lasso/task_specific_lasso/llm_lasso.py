@@ -209,7 +209,8 @@ def llm_lasso_cv(
     tolerance=1e-10,
     n_threads=4,
     alpha=1,
-    max_imp_pow=5
+    max_imp_pow=5,
+    lmda_path_size=100
 ):
     """
     Creates LLM-lasso model and chooses the optimal i for 1/imp^i.
@@ -233,6 +234,7 @@ def llm_lasso_cv(
     - `n_threads`: number of threads to use for model fitting.
     - `alpha`: elasticnet parameter (1 = pure l1 regularization, 0 = pure l2).
     - `max_imp_pow`: maximum power to use for 1/imp model.
+    - `lmda_path_size`: number of lambda values in the regularization path (at least 50).
     """
 
     multinomial = not regression and len(y_train.unique()) > 2
@@ -290,6 +292,7 @@ def llm_lasso_cv(
                     glm = glm_train,
                     seed=seed,
                     n_folds=folds_cv,
+                    lmda_path_size=lmda_path_size,  # At least 50 lambda values
                     min_ratio=lambda_min_ratio,
                     alpha=alpha,
                     penalty=pf / np.sum(pf) * x_train_scaled.shape[1],

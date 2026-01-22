@@ -5,6 +5,7 @@ from openai import OpenAI
 import requests
 import json
 import time
+import os
 from langchain.schema import SystemMessage, HumanMessage
 from langchain.memory import ConversationSummaryBufferMemory
 from dataclasses import dataclass, field
@@ -20,8 +21,10 @@ class LLMType(IntEnum):
     O1 = 1
     O1PRO = 3
     OPENROUTER = 2
+    VLLM = 4  # Open-source vLLM backend
 
 OPENAI_TYPES = [LLMType.GPT4O, LLMType.O1, LLMType.O1PRO]
+VLLM_TYPES = [LLMType.VLLM]
 
 @dataclass
 class CachedQuery:
@@ -111,6 +114,15 @@ class LLMQueryWrapperWithMemory:
             if llm_type != LLMType.O1PRO:
                 self.chat = ChatOpenAI(model=llm_name, temperature=temperature, top_p=top_p)
             self.openai_client = OpenAI()
+        elif llm_type == LLMType.VLLM:
+            # vLLM backend - uses OpenAI-compatible API
+            self.chat = VLLMLLM(
+                api_key=api_key,
+                model=llm_name,
+                top_p=top_p,
+                temperature=temperature,
+                repetition_penalty=repetition_penalty,
+            )
         else:
             self.llm_type = LLMType.OPENROUTER
             self.chat = OpenRouterLLM(
@@ -136,7 +148,7 @@ class LLMQueryWrapperWithMemory:
         """
         self.remember_outputs = remember_outputs
         self.default_output = default_output
-        if self.llm_type != LLMType.O1 and self.llm_type != LLMType.O1PRO:
+        if self.llm_type != LLMType.O1 and self.llm_type != LLMType.O1PRO and self.llm_type != LLMType.VLLM:
             self.memory = ConversationSummaryBufferMemory(llm=self.chat, max_token_limit=memory_size)
             self.memory.clear()
 
@@ -243,6 +255,14 @@ class LLMQueryWrapperWithMemory:
             ]
             response = self.chat(messages)
             output = response.content
+        elif self.llm_type == LLMType.VLLM:
+            # vLLM backend - serialize messages and query
+            messages = [
+                SystemMessage(content=system_message),
+                HumanMessage(content=full_prompt)
+            ]
+            serialized_prompt = "\n".join([f"{msg.content}" for msg in messages])
+            output = self.chat(serialized_prompt)
         else:
             messages = [
                 SystemMessage(content=system_message),
@@ -386,3 +406,135 @@ class OpenRouterLLM(LLM):
     @property
     def _llm_type(self) -> str:
         return "openrouter_llm"
+
+
+class VLLMLLM(LLM):
+    """
+    A custom LLM that interfaces with vLLM's OpenAI-compatible API.
+    
+    vLLM provides a drop-in replacement for OpenAI's API, allowing the use of
+    open-source models like Qwen, LLaMA, etc.
+
+    Configuration is done via environment variables:
+        - VLLM_CHAT_BASE_URL: Base URL for vLLM chat endpoint (default: http://localhost:8000/v1)
+        - VLLM_API_KEY: API key for authentication (if configured in vLLM)
+        - VLLM_CHAT_MODEL: Model name served by vLLM (default: qwen3-thinking)
+
+    Example:
+
+        .. code-block:: python
+
+            model = VLLMLLM(api_key="your_api_key", model="qwen3-thinking")
+            result = model.invoke("What are the key biomarkers for early-stage breast cancer?")
+    """
+
+    api_key: str = ""
+    """API key for vLLM access (optional, depends on vLLM configuration)."""
+
+    model: str = ""
+    """The model to query (e.g., "qwen3-thinking")."""
+
+    base_url: str = ""
+    """Base URL for vLLM API endpoint."""
+
+    top_p: float = 1.0
+    """Top-p sampling parameter."""
+
+    temperature: float = 0.0
+    """Temperature for randomness in responses."""
+
+    repetition_penalty: float = 1.0
+    """Penalty for repeated tokens."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Read configuration from environment variables with defaults
+        if not self.base_url:
+            self.base_url = os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
+        if not self.api_key:
+            self.api_key = os.environ.get("VLLM_API_KEY", "")
+        if not self.model:
+            self.model = os.environ.get("VLLM_CHAT_MODEL", "qwen3-thinking")
+
+    def _call(
+        self,
+        prompt: str,
+        stop: list[str] = None,
+        **kwargs: any,
+    ) -> str:
+        """
+        Run the LLM on the given input using vLLM's OpenAI-compatible API.
+
+        Args:
+            prompt: The prompt to generate from.
+            stop: Stop words to use when generating.
+            **kwargs: Arbitrary additional keyword arguments.
+
+        Returns:
+            The model output as a string.
+        """
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+
+        max_retries = kwargs.get("max_retries", MAX_RETRIES)
+        retry_delay = kwargs.get("retry_delay", RETRY_DELAY)
+
+        # Build URL for chat completions endpoint
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+
+        # Build headers
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    url=url,
+                    headers=headers,
+                    data=json.dumps({
+                        "model": self.model,
+                        "messages": messages,
+                        "top_p": self.top_p,
+                        "temperature": self.temperature,
+                        "repetition_penalty": self.repetition_penalty,
+                    }),
+                    timeout=300  # 5 minute timeout for large model responses
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+                    # Handle stop tokens
+                    if stop:
+                        for token in stop:
+                            content = content.split(token)[0]
+
+                    return content
+                else:
+                    raise ValueError(f"vLLM Error {response.status_code}: {response.text}")
+
+            except (requests.exceptions.RequestException, ValueError) as e:
+                print(f"vLLM attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    print("All vLLM retry attempts failed.")
+                    raise
+
+    @property
+    def _identifying_params(self) -> dict[str, any]:
+        return {
+            "model_name": self.model,
+            "base_url": self.base_url,
+            "top_p": self.top_p,
+            "temperature": self.temperature,
+            "repetition_penalty": self.repetition_penalty
+        }
+
+    @property
+    def _llm_type(self) -> str:
+        return "vllm_llm"

@@ -7,8 +7,9 @@ import pickle as pkl
 import re
 import sys
 import numpy as np
+from typing import Optional
 from langchain.retrievers.multi_query import MultiQueryRetriever
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.base import BaseLanguageModel
 
 
 def create_general_prompt(prompt_dir, category, genes, singular=False, display=False):
@@ -220,7 +221,8 @@ def find_max_gene(batch_genes, results):
 
 def retrieval_docs(
         batch_genes, category, retriever,
-        small=False, prompt_constr = False
+        small=False, prompt_constr=False,
+        llm: Optional[BaseLanguageModel] = None
     ):
     """
     Retrieve relevant documents for a batch of genes under a specified category.
@@ -247,6 +249,15 @@ def retrieval_docs(
         If `False`, each gene is queried separately to keep the input prompt size smaller. 
         If `True`, all genes are combined into a single query. Defaults to `False`.
 
+    :param prompt_constr: (bool, optional)
+        If `True`, uses MultiQueryRetriever with an LLM for query expansion.
+        Defaults to `False`.
+
+    :param llm: (BaseLanguageModel, optional)
+        LLM to use for MultiQueryRetriever when `prompt_constr=True`.
+        If None and `prompt_constr=True`, creates default ChatOpenAI.
+        Can be any LangChain-compatible LLM (OpenAI, vLLM, etc.).
+
     :return: (list)
         A list of retrieved documents relevant to the specified genes and category. 
         Each item in this list is typically a document object or dictionary-like structure 
@@ -256,7 +267,10 @@ def retrieval_docs(
     prompt_dir = 'prompts/retrieval_prompt.txt'
 
     if prompt_constr:
-        llm = ChatOpenAI(temperature=0)
+        if llm is None:
+            # Default to OpenAI ChatGPT for backward compatibility
+            from langchain_openai import ChatOpenAI
+            llm = ChatOpenAI(temperature=0)
         retriever = MultiQueryRetriever.from_llm(
             retriever=retriever, llm=llm
         )

@@ -10,6 +10,15 @@ Unlike traditional feature selection methods that rely solely on numerical data,
 
 📖 **[Detailed RAG Pipeline Documentation](documentation/RAG_PIPELINE.md)** - Understand how retrieval-augmented generation enhances feature selection.
 
+## Key Features
+
+✨ **Open-Source LLM Support**: Run LLM-Lasso locally with Qwen3 models via vLLM - no cloud API required  
+🔍 **Comprehensive Grid Search**: Automatic hyperparameter search with visualization (100+ λ values tested)  
+📊 **Grid Search Visualization**: Publication-ready plots showing regularization path analysis  
+🔐 **Privacy & Cost Control**: Process sensitive data locally without API costs  
+
+See [Open-Source LLM Integration](#open-source-llm-integration-with-qwen-models) and [Hyperparameter Search](#hyperparameter-search-and-grid-search-visualization) for details.
+
 ---
 
 ## Table of Contents
@@ -26,6 +35,7 @@ Unlike traditional feature selection methods that rely solely on numerical data,
   - [Verifying the Services](#verifying-the-services)
   - [Viewing Logs](#viewing-logs)
   - [Using with LLM-Lasso](#using-with-llm-lasso)
+  - [Open-Source LLM Integration with Qwen Models](#open-source-llm-integration-with-qwen-models)
   - [Stopping the Services](#stopping-the-services)
   - [Troubleshooting Docker](#troubleshooting-docker)
 - [Quick Start](#quick-start)
@@ -34,6 +44,7 @@ Unlike traditional feature selection methods that rely solely on numerical data,
   - [Creating a Prompt File](#creating-a-prompt-file)
   - [Running the Pipeline](#running-the-pipeline)
   - [Understanding Output Files](#understanding-output-files)
+  - [Hyperparameter Search and Grid Search Visualization](#hyperparameter-search-and-grid-search-visualization)
 - [PDF RAG Pipeline](#pdf-rag-pipeline)
 - [Tutorials](#tutorials)
 - [Repo Structure](#repo-structure)
@@ -345,21 +356,60 @@ The first launch will download the models from HuggingFace (~30GB+ total), which
 
 6. **Run the comprehensive test script:**
    
-   A Python test script is provided to verify both endpoints with detailed output:
+   A Python test script is provided to verify both endpoints with detailed output. The script automatically loads environment variables from `.env` in the project root:
    ```bash
-   # From project root (source .env first to load VLLM_API_KEY)
-   source .env
+   # From project root (no need to source .env - script loads it automatically)
    python opensource_llms/test_vllm_endpoints.py
    ```
    
-   The script tests:
-   - Health checks for both services
-   - Model listing endpoints
-   - Chat completion with a sample prompt
-   - Embeddings with sample texts
+   The script performs comprehensive testing:
+   - **Health checks** for both services (verifies services are responding)
+   - **Model listing endpoints** (checks available models and their configurations)
+   - **Chat completion** with a sample prompt (tests text generation)
+   - **Embeddings** with sample texts (tests vector generation with dimension verification)
    
-   Expected output on success:
+   The script provides detailed output including:
+   - Response times for each endpoint
+   - Model details (ID, root model, max length)
+   - Token usage statistics
+   - Embedding dimensions and sample values
+   - Comprehensive pass/fail summary
+   
+   **Example successful output:**
    ```
+   Loading environment from: /path/to/.env
+   
+   ======================================================================
+    vLLM ENDPOINT TEST SUITE
+   ======================================================================
+   
+   Chat Service URL: http://localhost:8000/v1
+   Embed Service URL: http://localhost:8001/v1
+   API Key: ********...XXXX
+   
+   [Testing Chat Service Health]
+     Status: 200 OK
+     Response Time: 18.0ms
+   
+   [Testing Chat Completion]
+     Status: 200 OK
+     Response Time: 43179.1ms
+     Response Details:
+       Role: assistant
+       Content: [model response]
+     Token Usage:
+       Prompt Tokens: 37
+       Completion Tokens: 50
+       Total Tokens: 87
+   
+   [Testing Embeddings]
+     Status: 200 OK
+     Response Time: 41624.2ms
+     Response Details:
+       Number of Embeddings: 2
+       Dimensions: 4096
+       Magnitude: 1.0000
+   
    ======================================================================
     TEST SUMMARY
    ======================================================================
@@ -370,6 +420,8 @@ The first launch will download the models from HuggingFace (~30GB+ total), which
    
      All tests passed! vLLM services are working correctly.
    ```
+   
+   **Note:** The script can also use environment variables `VLLM_CHAT_BASE_URL`, `VLLM_EMBED_BASE_URL`, `VLLM_CHAT_MODEL`, and `VLLM_EMBED_MODEL` to override defaults if your services run on different ports or use different model names.
 
 ### Viewing Logs
 
@@ -400,21 +452,26 @@ docker compose --env-file .env -f opensource_llms/docker-compose.yml logs > vllm
 
 ### Using with LLM-Lasso
 
-To use the local vLLM services with LLM-Lasso, configure your environment to point to the local endpoints:
+LLM-Lasso now supports both **OpenAI** (cloud) and **vLLM** (local open-source) backends. Use the `--llm-backend` argument to switch between them.
 
-```python
-# In your Python code or .env file
-import os
+**Quick Start with vLLM (Qwen Models):**
 
-# For chat/completion models
-os.environ["OPENAI_API_BASE"] = "http://localhost:8000/v1"
-os.environ["OPENAI_API_KEY"] = "your_vllm_api_key"  # Same as VLLM_API_KEY
+```bash
+# 1. Ensure vLLM services are running (see Prerequisites above)
+# 2. Run LLM-Lasso with vLLM backend
 
-# For embedding models (if using separate endpoint)
-os.environ["OPENAI_EMBEDDING_API_BASE"] = "http://localhost:8001/v1"
+python scripts/run_pbd_llm_lasso.py \
+    --dataset_path /path/to/dataset.csv \
+    --feature_names_path /path/to/features.txt \
+    --prompt-filename prompts/my_prompt.txt \
+    --target_column target_var \
+    --category "My Category" \
+    --llm-backend vllm \
+    --pdf_rag
 ```
 
-Or pass directly to the LLM-Lasso pipeline:
+**Running with OpenAI (Cloud - Default):**
+
 ```bash
 python scripts/run_pbd_llm_lasso.py \
     --dataset_path /path/to/dataset.csv \
@@ -422,9 +479,20 @@ python scripts/run_pbd_llm_lasso.py \
     --prompt-filename prompts/my_prompt.txt \
     --target_column target_var \
     --category "My Category" \
-    --model-type qwen3-thinking \
+    --llm-backend openai \
+    --model-type gpt-4o \
     --pdf_rag
 ```
+
+**Backend-Specific Arguments:**
+
+| Argument | OpenAI Backend | vLLM Backend |
+|----------|---------------|--------------|
+| `--llm-backend` | `openai` (default) | `vllm` |
+| `--model-type` | `gpt-4o`, `o1`, `o1-pro`, `openrouter` | `vllm` (uses env vars) |
+| `--model-name` | Optional custom model name | Uses `VLLM_CHAT_MODEL` env var |
+
+> **📖 For detailed information about the Qwen models, code integration, and advanced usage, see the [Open-Source LLM Integration with Qwen Models](#open-source-llm-integration-with-qwen-models) section below.**
 
 **OpenAI-Compatible Endpoints:**
 
@@ -435,6 +503,199 @@ python scripts/run_pbd_llm_lasso.py \
 | Embeddings | `http://localhost:8001/v1/embeddings` | Vector embeddings |
 | Embed Models | `http://localhost:8001/v1/models` | List available models |
 | Health | `http://localhost:8000/health` | Service health check |
+
+### Open-Source LLM Integration with Qwen Models
+
+LLM-Lasso has been extended to support open-source LLMs through vLLM, with **Qwen3 models** as the default configuration. This integration allows you to run the entire LLM-Lasso pipeline locally without relying on cloud APIs.
+
+#### Models Used
+
+The Docker setup deploys two Qwen3 models:
+
+1. **Qwen3-30B-A3B-Thinking-2507-FP8** (`qwen3-thinking`)
+   - **Purpose**: Chat completions for penalty score generation
+   - **Model Card**: [Qwen/Qwen3-30B-A3B-Thinking-2507-FP8](https://huggingface.co/Qwen/Qwen3-30B-A3B-Thinking-2507-FP8)
+   - **Architecture**: 30B parameter thinking model with FP8 quantization
+   - **VRAM**: ~24GB recommended
+   - **Max Context**: 32,768 tokens
+   - **Endpoint**: `http://localhost:8000/v1/chat/completions`
+   - **Served as**: `qwen3-thinking`
+
+2. **Qwen3-Embedding-8B** (`qwen3-embed`)
+   - **Purpose**: Text embeddings for RAG vectorstore creation and retrieval
+   - **Model Card**: [Qwen/Qwen3-Embedding-8B](https://huggingface.co/Qwen/Qwen3-Embedding-8B)
+   - **Architecture**: 8B parameter embedding model
+   - **VRAM**: ~8GB recommended
+   - **Max Context**: 8,192 tokens
+   - **Embedding Dimensions**: 4,096
+   - **Endpoint**: `http://localhost:8001/v1/embeddings`
+   - **Served as**: `qwen3-embed`
+
+#### Code Integration
+
+The integration adds support for vLLM across the entire LLM-Lasso pipeline:
+
+**1. LLM Module (`src/llm_lasso/llm_penalty/llm.py`)**
+   - Added `LLMType.VLLM` enum value
+   - Created `VLLMLLM` class implementing LangChain's LLM interface
+   - Reads configuration from environment variables:
+     - `VLLM_CHAT_BASE_URL` (default: `http://localhost:8000/v1`)
+     - `VLLM_API_KEY` (for authentication)
+     - `VLLM_CHAT_MODEL` (default: `qwen3-thinking`)
+
+**2. Embeddings Module (`src/llm_lasso/llm_penalty/embeddings.py`)**
+   - New module with `VLLMEmbeddings` class
+   - Implements LangChain's `Embeddings` interface
+   - Factory function `get_embeddings(backend="vllm")` for easy initialization
+   - Reads configuration from:
+     - `VLLM_EMBED_BASE_URL` (default: `http://localhost:8001/v1`)
+     - `VLLM_API_KEY` (for authentication)
+     - `VLLM_EMBED_MODEL` (default: `qwen3-embed`)
+
+**3. RAG Pipeline Updates**
+   - `pdf_vectorstore.py`: Updated to accept any LangChain-compatible embeddings
+   - `score_collection.py`: MultiQueryRetriever accepts optional LLM parameter
+   - `omim_RAG_process.py`: Updated to support vLLM for query expansion
+
+**4. Main Script (`scripts/run_pbd_llm_lasso.py`)**
+   - Added `--llm-backend` argument with choices: `openai`, `vllm`
+   - Automatically initializes appropriate embeddings and LLM based on backend
+   - Backward compatible: defaults to `openai` if not specified
+   - Fully compatible with hyperparameter grid search (works with both backends)
+
+#### Usage Examples
+
+**Example 1: Run LLM-Lasso with Qwen models (local)**
+
+```bash
+# 1. Start vLLM services (in one terminal)
+docker compose --env-file .env -f opensource_llms/docker-compose.yml up
+
+# 2. Wait for models to load (check logs or health endpoints)
+
+# 3. Run LLM-Lasso with vLLM backend (in another terminal)
+python scripts/run_pbd_llm_lasso.py \
+    --dataset_path examples/example_data/pbd_focal.csv \
+    --feature_names_path examples/example_data/pbd_focal_variables.txt \
+    --prompt-filename prompts/pbd_normal.txt \
+    --target_column target_var \
+    --category "Suicidal Ideation" \
+    --llm-backend vllm \
+    --pdf_rag \
+    --save_dir results/qwen_experiment
+```
+
+**Example 1b: Using Qwen models with comprehensive grid search**
+
+```bash
+# Run with vLLM backend AND comprehensive hyperparameter search
+python scripts/run_pbd_llm_lasso.py \
+    --dataset_path examples/example_data/pbd_focal.csv \
+    --feature_names_path examples/example_data/pbd_focal_variables.txt \
+    --prompt-filename prompts/pbd_normal.txt \
+    --target_column target_var \
+    --category "Suicidal Ideation" \
+    --llm-backend vllm \
+    --pdf_rag \
+    --use_loo \
+    --lmda_path_size 100 \
+    --save_dir results/qwen_with_gridsearch
+```
+
+This will:
+- Use local Qwen models (no cloud API calls)
+- Perform comprehensive grid search (100 λ values)
+- Generate grid search plots in `results/qwen_with_gridsearch/gridsearch/`
+
+**Example 2: Using custom vLLM endpoints**
+
+If your vLLM services run on different ports or hosts, configure via `.env`:
+
+```bash
+# In .env file
+VLLM_CHAT_BASE_URL=http://192.168.1.100:8000/v1
+VLLM_EMBED_BASE_URL=http://192.168.1.100:8001/v1
+VLLM_CHAT_MODEL=qwen3-thinking
+VLLM_EMBED_MODEL=qwen3-embed
+VLLM_API_KEY=your_secure_api_key
+```
+
+Then run normally:
+```bash
+python scripts/run_pbd_llm_lasso.py \
+    --llm-backend vllm \
+    # ... other arguments
+```
+
+**Example 3: Switching between OpenAI and vLLM**
+
+```bash
+# Use OpenAI (cloud)
+python scripts/run_pbd_llm_lasso.py \
+    --llm-backend openai \
+    --model-type gpt-4o \
+    # ... other arguments
+
+# Use vLLM (local Qwen models)
+python scripts/run_pbd_llm_lasso.py \
+    --llm-backend vllm \
+    # ... other arguments (model names come from env vars)
+```
+
+#### Benefits of Using Qwen Models
+
+1. **Privacy**: All processing happens locally; no data sent to cloud APIs
+2. **Cost**: No API usage fees; only GPU electricity costs
+3. **Control**: Full control over model versions, parameters, and infrastructure
+4. **Performance**: Lower latency for local deployments
+5. **Reproducibility**: Consistent model versions without API changes
+6. **Grid Search Compatible**: Works seamlessly with hyperparameter grid search visualization
+
+#### Integration with Hyperparameter Search
+
+The open-source vLLM backend is fully compatible with LLM-Lasso's hyperparameter grid search:
+
+- **Grid Search**: Works identically with both `openai` and `vllm` backends
+- **Visualization**: Grid search plots are generated regardless of backend choice
+- **Performance**: Local models can be faster for repeated grid search iterations
+- **Cost Savings**: No API costs when testing many hyperparameter combinations
+
+Example combining both features:
+```bash
+# Use local Qwen models + comprehensive grid search
+python scripts/run_pbd_llm_lasso.py \
+    --llm-backend vllm \
+    --use_loo \
+    --lmda_path_size 100 \
+    # ... other arguments
+```
+
+#### Model Characteristics
+
+**Qwen3-30B-A3B-Thinking-2507-FP8:**
+- **Thinking Model**: Uses internal reasoning chains for complex problem-solving
+- **FP8 Quantization**: Reduced precision for memory efficiency while maintaining quality
+- **Context Length**: 32K tokens (suitable for long documents in RAG)
+- **Use Case**: Penalty score generation, where reasoning about feature relevance is important
+
+**Qwen3-Embedding-8B:**
+- **High Dimensionality**: 4,096 dimensions (vs. OpenAI's 1,536)
+- **Long Context**: 8K tokens per document
+- **Use Case**: Dense vector embeddings for semantic search in RAG pipeline
+
+#### Environment Variables Reference
+
+| Variable | Description | Default | Required |
+|----------|-------------|---------|----------|
+| `VLLM_CHAT_BASE_URL` | Base URL for chat completions | `http://localhost:8000/v1` | No |
+| `VLLM_EMBED_BASE_URL` | Base URL for embeddings | `http://localhost:8001/v1` | No |
+| `VLLM_CHAT_MODEL` | Model name for chat | `qwen3-thinking` | No |
+| `VLLM_EMBED_MODEL` | Model name for embeddings | `qwen3-embed` | No |
+| `VLLM_API_KEY` | API key for authentication | (empty) | No* |
+| `HUGGINGFACE_TOKEN` | Token for downloading models | - | Yes** |
+
+\* Required if vLLM is configured with `--api-key`  
+\** Required for downloading gated Qwen3 models from HuggingFace
 
 ### Stopping the Services
 
@@ -592,7 +853,8 @@ python scripts/run_pbd_llm_lasso.py \
 | `--save_dir` | Output directory | Same as dataset directory |
 | `--pdf_rag` | Enable PDF RAG | `False` |
 | `--pdf_rag_num_docs` | Number of PDF documents to retrieve per feature query. Each feature gets up to this many documents. With deduplication, total unique documents will be fewer. Higher values provide more context but increase processing time. | `3` |
-| `--model-type` | LLM model (`gpt-4o`, `gpt-4`, etc.) | `gpt-4o` |
+| `--llm-backend` | LLM backend: `openai` (cloud) or `vllm` (local open-source). See [Using with LLM-Lasso](#using-with-llm-lasso) for vLLM setup. | `openai` |
+| `--model-type` | LLM model (`gpt-4o`, `o1`, `o1-pro`, `openrouter` for OpenAI backend) | `gpt-4o` |
 | `--temp` | LLM temperature (0-2). Use `0` for deterministic, reproducible results. Higher values (0.7-1.0) add creativity but reduce reproducibility. **Recommended: `0` for research reproducibility.** | `0` |
 | `--n-trials` | Number of scoring trials | `1` |
 | `--test_size` | Train/test split ratio | `0.2` |
@@ -613,6 +875,51 @@ All outputs are saved to the same directory as your input dataset (or `--save_di
 | `trial_scores_RAG.json` | Per-trial scoring data |
 | `final_scores_RAG.pkl` | Serialized final scores |
 | `lasso_results.csv` | Lasso model coefficients (if adelie installed) |
+| `gridsearch/` | **Grid search plots and data** (see below) |
+
+#### Grid Search Output (`gridsearch/` subfolder)
+
+LLM-Lasso performs comprehensive hyperparameter search over regularization parameters (λ) to find the optimal model. When using LOO cross-validation (`--use_loo`), the pipeline automatically saves detailed grid search results showing how different λ values affect model performance.
+
+**What is Grid Search?**
+
+Grid search systematically tests multiple regularization parameter values to find the optimal λ that minimizes cross-validation loss. This ensures the Lasso model generalizes well to unseen data.
+
+**Generated Files:**
+
+| File | Description |
+|------|-------------|
+| `lambda_vs_accuracy_final_model.png` | Plot showing how λ affects classification accuracy. Higher accuracy is better. |
+| `lambda_vs_auc_final_model.png` | Plot showing how λ affects AUC-ROC. Higher AUC indicates better discrimination. |
+| `lambda_vs_loss_final_model.png` | Plot showing CV loss vs λ with error bars (std across folds). Lower loss is better. |
+| `gridsearch_summary_final_model.png` | Combined 3-panel summary showing all metrics side-by-side |
+| `gridsearch_results_final_model.csv` | Raw data table with columns: `lambda`, `neg_log_lambda`, `accuracy`, `auc_roc`, `cv_loss`, `is_best` |
+
+**Understanding the Plots:**
+
+- **X-axis**: Uses `-log₁₀(λ)` (common practice in regularization visualization)
+  - Left side = stronger regularization (more features removed)
+  - Right side = weaker regularization (more features retained)
+- **Y-axis**: Performance metric (accuracy, AUC, or loss)
+- **Red vertical line**: Marks the optimal λ that minimizes CV loss
+- **Red point**: Shows the best metric value at optimal λ
+
+**Configuration:**
+
+- **Minimum**: At least 50 λ values are tested (ensures adequate search coverage)
+- **Default**: 100 λ values (provides fine-grained search)
+- **Custom**: Set via `--lmda_path_size` argument
+
+**Example Interpretation:**
+
+```
+Optimal λ found at -log₁₀(λ) = 2.5
+Best accuracy: 0.85
+Best AUC-ROC: 0.91
+Minimum CV loss: 0.12
+```
+
+This means the model performs best with moderate regularization, balancing feature selection and model complexity.
 
 #### Example Output (`penalty_scores.json`):
 ```json
@@ -626,24 +933,76 @@ All outputs are saved to the same directory as your input dataset (or `--save_di
 
 Lower scores (1-2) indicate more relevant features that receive lower Lasso penalties.
 
+### Hyperparameter Search and Grid Search Visualization
+
+LLM-Lasso includes comprehensive hyperparameter search capabilities with automatic visualization of the search process.
+
+#### How It Works
+
+1. **Regularization Path**: The pipeline tests multiple λ (lambda) values along a regularization path
+2. **Cross-Validation**: For each λ, performance is evaluated using k-fold cross-validation
+3. **Optimal Selection**: The λ that minimizes CV loss is selected
+4. **Visualization**: All results are automatically plotted and saved
+
+#### Key Features
+
+- **Comprehensive Search**: Tests at least 50 λ values by default (configurable up to 100+)
+- **Multiple Metrics**: Tracks accuracy, AUC-ROC, and CV loss simultaneously
+- **Visual Analysis**: Generates publication-ready plots showing the entire search space
+- **Reproducibility**: Saves raw data (CSV) for further analysis
+
+#### Configuration Options
+
+```bash
+# Use default (100 lambda values)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    # ... other arguments
+
+# Customize search space (minimum 50)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --lmda_path_size 150 \
+    # ... other arguments
+```
+
+#### Output Location
+
+All grid search plots and data are saved in:
+```
+{save_dir}/gridsearch/
+```
+
+This includes:
+- Individual metric plots (accuracy, AUC, loss)
+- Combined summary plot
+- Raw CSV data for custom analysis
+
+See [Grid Search Output](#grid-search-output-gridsearch-subfolder) section above for detailed file descriptions.
+
 ### Complete Example
 
 Here's a full example running LLM-Lasso with PDF RAG on a clinical dataset:
+
+**Example A: Using OpenAI with Grid Search**
 
 ```bash
 # Activate virtual environment
 source virtualenv/bin/activate
 
-# Run the full pipeline
+# Run the full pipeline with OpenAI backend
 python scripts/run_pbd_llm_lasso.py \
     --dataset_path /path/to/my_clinical_data.csv \
     --feature_names_path /path/to/clinical_features.txt \
     --prompt-filename prompts/pbd_normal.txt \
     --target_column target_var \
     --category "Suicidal Ideation" \
+    --llm-backend openai \
+    --model-type gpt-4o \
     --pdf_rag \
     --pdf_rag_num_docs 3 \
-    --model-type gpt-4o \
+    --use_loo \
+    --lmda_path_size 100 \
     --temp 0 \
     --n-trials 1 \
     --test_size 0.3 \
@@ -651,6 +1010,46 @@ python scripts/run_pbd_llm_lasso.py \
     --log_level INFO \
     --wipe
 ```
+
+**Example B: Using Open-Source Qwen Models with Grid Search**
+
+```bash
+# 1. Start vLLM services (in one terminal)
+docker compose --env-file .env -f opensource_llms/docker-compose.yml up
+
+# 2. Run LLM-Lasso with vLLM backend (in another terminal)
+python scripts/run_pbd_llm_lasso.py \
+    --dataset_path /path/to/my_clinical_data.csv \
+    --feature_names_path /path/to/clinical_features.txt \
+    --prompt-filename prompts/pbd_normal.txt \
+    --target_column target_var \
+    --category "Suicidal Ideation" \
+    --llm-backend vllm \
+    --pdf_rag \
+    --pdf_rag_num_docs 3 \
+    --use_loo \
+    --lmda_path_size 100 \
+    --temp 0 \
+    --n-trials 1 \
+    --test_size 0.3 \
+    --imputation_strategy median \
+    --log_level INFO \
+    --wipe
+```
+
+**Outputs Generated:**
+
+Both examples will create:
+- `penalty_scores.json` - LLM-generated feature penalties
+- `gridsearch/` folder - Hyperparameter search plots and data
+  - `lambda_vs_accuracy_final_model.png`
+  - `lambda_vs_auc_final_model.png`
+  - `lambda_vs_loss_final_model.png`
+  - `gridsearch_summary_final_model.png`
+  - `gridsearch_results_final_model.csv`
+- `loo_predictions.csv` - Cross-validation predictions
+- `model_coefficients.json` - Final model coefficients
+- Evaluation plots (ROC, PR curves, etc.)
 
 **Expected Output:**
 ```
@@ -726,6 +1125,7 @@ python scripts/run_pbd_llm_lasso.py \
 |----------|-------------|---------|
 | `--use_loo` | Enable Leave-One-Out cross-validation | `False` |
 | `--inner_cv_folds` | Inner CV folds for hyperparameter tuning | `10` |
+| `--lmda_path_size` | Number of lambda (regularization) parameters to search. Gridsearch plots are saved in `gridsearch/` subfolder. | `100` |
 
 ### Handling Class Imbalance with SMOTE
 

@@ -351,7 +351,8 @@ def split_data(
 def setup_pdf_vectorstore(
     persist_directory: str,
     collection_name: str,
-    logger: logging.Logger
+    logger: logging.Logger,
+    llm_backend: str = "openai"
 ):
     """
     Load PDF vectorstore for RAG.
@@ -360,6 +361,7 @@ def setup_pdf_vectorstore(
         persist_directory: Path to vectorstore directory
         collection_name: Name of the collection
         logger: Logger instance
+        llm_backend: LLM backend to use ("openai" or "vllm")
     
     Returns:
         Tuple of (vectorstore, embeddings)
@@ -370,6 +372,7 @@ def setup_pdf_vectorstore(
     
     logger.info(f"Persist directory: {persist_directory}")
     logger.info(f"Collection name: {collection_name}")
+    logger.info(f"LLM backend: {llm_backend}")
     
     # Check if vectorstore exists
     if not os.path.exists(persist_directory):
@@ -377,31 +380,47 @@ def setup_pdf_vectorstore(
         logger.error("Run 'python playground/interactive_pdf_RAG.py' to create the vectorstore first")
         raise FileNotFoundError(f"Vectorstore directory not found: {persist_directory}")
     
-    # Set up API key
-    if HAS_CONSTANTS:
-        api_key = getattr(constants, 'OPENAI_API', None)
-        if api_key:
-            os.environ["OPENAI_API_KEY"] = api_key
-            logger.debug("API key loaded from constants")
-    
-    if "OPENAI_API_KEY" not in os.environ or not os.environ["OPENAI_API_KEY"]:
-        if "OPENAI_API" in os.environ and os.environ["OPENAI_API"]:
-            os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_API"]
-            logger.debug("API key loaded from OPENAI_API environment variable")
-    
-    if "OPENAI_API_KEY" not in os.environ or not os.environ["OPENAI_API_KEY"]:
-        logger.error("OPENAI_API_KEY not set")
-        raise ValueError("OPENAI_API_KEY must be set in environment or constants")
-    
-    logger.info("Initializing OpenAI embeddings...")
-    start_time = time.time()
-    
-    from langchain_openai import OpenAIEmbeddings
     from llm_lasso.llm_penalty.rag import load_pdf_vectorstore
+    from llm_lasso.llm_penalty.embeddings import get_embeddings
     
-    embeddings = OpenAIEmbeddings()
-    embed_time = time.time() - start_time
-    logger.info(f"Embeddings initialized in {embed_time:.2f}s")
+    if llm_backend == "vllm":
+        # vLLM backend - uses local vLLM server
+        logger.info("Initializing vLLM embeddings...")
+        
+        # Check for vLLM configuration
+        vllm_embed_url = os.environ.get("VLLM_EMBED_BASE_URL", "http://localhost:8001/v1")
+        vllm_model = os.environ.get("VLLM_EMBED_MODEL", "qwen3-embed")
+        logger.info(f"vLLM Embed URL: {vllm_embed_url}")
+        logger.info(f"vLLM Embed Model: {vllm_model}")
+        
+        start_time = time.time()
+        embeddings = get_embeddings(backend="vllm")
+        embed_time = time.time() - start_time
+        logger.info(f"vLLM embeddings initialized in {embed_time:.2f}s")
+    else:
+        # OpenAI backend (default)
+        # Set up API key
+        if HAS_CONSTANTS:
+            api_key = getattr(constants, 'OPENAI_API', None)
+            if api_key:
+                os.environ["OPENAI_API_KEY"] = api_key
+                logger.debug("API key loaded from constants")
+        
+        if "OPENAI_API_KEY" not in os.environ or not os.environ["OPENAI_API_KEY"]:
+            if "OPENAI_API" in os.environ and os.environ["OPENAI_API"]:
+                os.environ["OPENAI_API_KEY"] = os.environ["OPENAI_API"]
+                logger.debug("API key loaded from OPENAI_API environment variable")
+        
+        if "OPENAI_API_KEY" not in os.environ or not os.environ["OPENAI_API_KEY"]:
+            logger.error("OPENAI_API_KEY not set")
+            raise ValueError("OPENAI_API_KEY must be set in environment or constants")
+        
+        logger.info("Initializing OpenAI embeddings...")
+        start_time = time.time()
+        
+        embeddings = get_embeddings(backend="openai")
+        embed_time = time.time() - start_time
+        logger.info(f"OpenAI embeddings initialized in {embed_time:.2f}s")
     
     logger.info("Loading PDF vectorstore...")
     start_time = time.time()
@@ -439,7 +458,8 @@ def generate_llm_penalties(
     batch_size: int,
     pdf_rag_num_docs: int,
     wipe: bool,
-    logger: logging.Logger
+    logger: logging.Logger,
+    llm_backend: str = "openai"
 ) -> Dict[str, Any]:
     """
     Generate LLM penalty factors using PDF RAG.
@@ -459,6 +479,7 @@ def generate_llm_penalties(
         pdf_rag_num_docs: Number of PDF documents to retrieve
         wipe: Whether to wipe existing results
         logger: Logger instance
+        llm_backend: LLM backend to use ("openai" or "vllm")
     
     Returns:
         Dictionary with penalty scores
@@ -470,6 +491,7 @@ def generate_llm_penalties(
     logger.info(f"Category: {category}")
     logger.info(f"Prompt file: {prompt_file}")
     logger.info(f"Save directory: {save_dir}")
+    logger.info(f"LLM backend: {llm_backend}")
     logger.info(f"Model type: {model_type}")
     logger.info(f"Model name: {model_name}")
     logger.info(f"Temperature: {temperature}")
@@ -490,24 +512,41 @@ def generate_llm_penalties(
     from llm_lasso.llm_penalty.penalty_collection import collect_penalties, PenaltyCollectionParams
     from llm_lasso.llm_penalty.llm import LLMQueryWrapperWithMemory, LLMType
     
-    # Set up LLM
+    # Set up LLM based on backend
     logger.info("Initializing LLM...")
     
-    if model_type == "gpt-4o":
-        llm_type = LLMType.GPT4O
-        api_key = os.environ.get("OPENAI_API_KEY")
-    elif model_type == "o1":
-        llm_type = LLMType.O1
-        api_key = os.environ.get("OPENAI_API_KEY")
-    elif model_type == "o1-pro":
-        llm_type = LLMType.O1PRO
-        api_key = os.environ.get("OPENAI_API_KEY")
+    if llm_backend == "vllm":
+        # vLLM backend - local open-source models
+        llm_type = LLMType.VLLM
+        api_key = os.environ.get("VLLM_API_KEY", "")
+        
+        # Get model name from env or argument
+        if model_name:
+            actual_model_name = model_name
+        else:
+            actual_model_name = os.environ.get("VLLM_CHAT_MODEL", "qwen3-thinking")
+        
+        vllm_url = os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
+        logger.info(f"vLLM Chat URL: {vllm_url}")
+        logger.info(f"vLLM Chat Model: {actual_model_name}")
     else:
-        llm_type = LLMType.OPENROUTER
-        api_key = os.environ.get("OPEN_ROUTER", os.environ.get("OPENAI_API_KEY"))
+        # OpenAI backend (default)
+        if model_type == "gpt-4o":
+            llm_type = LLMType.GPT4O
+            api_key = os.environ.get("OPENAI_API_KEY")
+        elif model_type == "o1":
+            llm_type = LLMType.O1
+            api_key = os.environ.get("OPENAI_API_KEY")
+        elif model_type == "o1-pro":
+            llm_type = LLMType.O1PRO
+            api_key = os.environ.get("OPENAI_API_KEY")
+        else:
+            llm_type = LLMType.OPENROUTER
+            api_key = os.environ.get("OPEN_ROUTER", os.environ.get("OPENAI_API_KEY"))
+        
+        actual_model_name = model_name if model_name else model_type
     
-    actual_model_name = model_name if model_name else model_type
-    logger.info(f"Using LLM: {actual_model_name} (type: {llm_type})")
+    logger.info(f"Using LLM: {actual_model_name} (type: {llm_type}, backend: {llm_backend})")
     
     model = LLMQueryWrapperWithMemory(
         llm_type=llm_type,
@@ -1532,6 +1571,157 @@ def generate_coefficient_plot(
     logger.info(f"Generated 4 coefficient plots in {save_dir}")
 
 
+def save_gridsearch_plots(
+    cv_result,
+    save_dir: str,
+    logger: logging.Logger,
+    fold_label: str = "final"
+) -> None:
+    """
+    Save gridsearch parameter search plots showing lambda vs metrics.
+    
+    Args:
+        cv_result: CVGrpnetResult from cv_grpnet
+        save_dir: Directory to save plots (gridsearch subfolder will be created)
+        logger: Logger instance
+        fold_label: Label for this gridsearch (e.g., "final", "fold_1")
+    """
+    # Create gridsearch subfolder
+    gridsearch_dir = os.path.join(save_dir, "gridsearch")
+    os.makedirs(gridsearch_dir, exist_ok=True)
+    
+    lmdas = cv_result.lmdas
+    n_lambdas = len(lmdas)
+    
+    # Compute accuracy from test_error (test_error is Hamming loss = 1 - accuracy)
+    accuracy = 1.0 - cv_result.test_error
+    
+    # Get AUC-ROC if available
+    roc_auc = cv_result.roc_auc if cv_result.roc_auc is not None else None
+    
+    # Get best lambda index
+    best_idx = cv_result.best_idx
+    best_lambda = lmdas[best_idx]
+    
+    # Use -log(lambda) for better visualization (common practice)
+    neg_log_lambda = -np.log10(lmdas)
+    
+    logger.info(f"Saving gridsearch plots ({n_lambdas} lambda values) to {gridsearch_dir}")
+    
+    # Plot 1: Lambda vs Accuracy
+    fig1, ax1 = plt.subplots(figsize=(10, 6))
+    ax1.plot(neg_log_lambda, accuracy, 'b-', linewidth=2, marker='o', markersize=3, alpha=0.7)
+    ax1.axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5, 
+                label=f'Best λ = {best_lambda:.2e}')
+    ax1.scatter([-np.log10(best_lambda)], [accuracy[best_idx]], color='r', s=100, zorder=5,
+                label=f'Best Accuracy = {accuracy[best_idx]:.4f}')
+    ax1.set_xlabel(r'$-\log_{10}(\lambda)$', fontsize=12)
+    ax1.set_ylabel('Accuracy', fontsize=12)
+    ax1.set_title(f'Grid Search: Lambda vs Accuracy ({fold_label})', fontsize=14, fontweight='bold')
+    ax1.legend(loc='best')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim([0, 1.05])
+    plt.tight_layout()
+    fig1.savefig(os.path.join(gridsearch_dir, f'lambda_vs_accuracy_{fold_label}.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig1)
+    
+    # Plot 2: Lambda vs AUC-ROC (if available)
+    if roc_auc is not None and not np.all(roc_auc == 0):
+        fig2, ax2 = plt.subplots(figsize=(10, 6))
+        ax2.plot(neg_log_lambda, roc_auc, 'g-', linewidth=2, marker='s', markersize=3, alpha=0.7)
+        ax2.axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5,
+                    label=f'Best λ = {best_lambda:.2e}')
+        ax2.scatter([-np.log10(best_lambda)], [roc_auc[best_idx]], color='r', s=100, zorder=5,
+                    label=f'AUC at Best λ = {roc_auc[best_idx]:.4f}')
+        ax2.set_xlabel(r'$-\log_{10}(\lambda)$', fontsize=12)
+        ax2.set_ylabel('AUC-ROC', fontsize=12)
+        ax2.set_title(f'Grid Search: Lambda vs AUC-ROC ({fold_label})', fontsize=14, fontweight='bold')
+        ax2.legend(loc='best')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim([0, 1.05])
+        plt.tight_layout()
+        fig2.savefig(os.path.join(gridsearch_dir, f'lambda_vs_auc_{fold_label}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig2)
+    
+    # Plot 3: Lambda vs CV Loss
+    avg_losses = cv_result.avg_losses
+    std_losses = np.std(cv_result.losses, axis=0, ddof=0) if cv_result.losses is not None else None
+    
+    fig3, ax3 = plt.subplots(figsize=(10, 6))
+    if std_losses is not None:
+        ax3.errorbar(neg_log_lambda, avg_losses, yerr=std_losses, fmt='m-', linewidth=1.5,
+                     marker='d', markersize=3, alpha=0.7, capsize=2, elinewidth=0.5, ecolor='gray')
+    else:
+        ax3.plot(neg_log_lambda, avg_losses, 'm-', linewidth=2, marker='d', markersize=3, alpha=0.7)
+    ax3.axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5,
+                label=f'Best λ = {best_lambda:.2e}')
+    ax3.scatter([-np.log10(best_lambda)], [avg_losses[best_idx]], color='r', s=100, zorder=5,
+                label=f'Min Loss = {avg_losses[best_idx]:.4f}')
+    ax3.set_xlabel(r'$-\log_{10}(\lambda)$', fontsize=12)
+    ax3.set_ylabel('CV Loss (with std)', fontsize=12)
+    ax3.set_title(f'Grid Search: Lambda vs CV Loss ({fold_label})', fontsize=14, fontweight='bold')
+    ax3.legend(loc='best')
+    ax3.grid(True, alpha=0.3)
+    plt.tight_layout()
+    fig3.savefig(os.path.join(gridsearch_dir, f'lambda_vs_loss_{fold_label}.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig3)
+    
+    # Plot 4: Combined metrics plot
+    fig4, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Accuracy
+    axes[0].plot(neg_log_lambda, accuracy, 'b-', linewidth=2, marker='o', markersize=2, alpha=0.7)
+    axes[0].axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+    axes[0].scatter([-np.log10(best_lambda)], [accuracy[best_idx]], color='r', s=80, zorder=5)
+    axes[0].set_xlabel(r'$-\log_{10}(\lambda)$')
+    axes[0].set_ylabel('Accuracy')
+    axes[0].set_title('Accuracy')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim([0, 1.05])
+    
+    # AUC-ROC
+    if roc_auc is not None and not np.all(roc_auc == 0):
+        axes[1].plot(neg_log_lambda, roc_auc, 'g-', linewidth=2, marker='s', markersize=2, alpha=0.7)
+        axes[1].axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+        axes[1].scatter([-np.log10(best_lambda)], [roc_auc[best_idx]], color='r', s=80, zorder=5)
+        axes[1].set_ylabel('AUC-ROC')
+        axes[1].set_ylim([0, 1.05])
+    else:
+        axes[1].text(0.5, 0.5, 'AUC-ROC\nNot Available', ha='center', va='center', fontsize=12)
+    axes[1].set_xlabel(r'$-\log_{10}(\lambda)$')
+    axes[1].set_title('AUC-ROC')
+    axes[1].grid(True, alpha=0.3)
+    
+    # CV Loss
+    axes[2].plot(neg_log_lambda, avg_losses, 'm-', linewidth=2, marker='d', markersize=2, alpha=0.7)
+    axes[2].axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+    axes[2].scatter([-np.log10(best_lambda)], [avg_losses[best_idx]], color='r', s=80, zorder=5)
+    axes[2].set_xlabel(r'$-\log_{10}(\lambda)$')
+    axes[2].set_ylabel('CV Loss')
+    axes[2].set_title('CV Loss')
+    axes[2].grid(True, alpha=0.3)
+    
+    fig4.suptitle(f'Grid Search Summary: {n_lambdas} Lambda Values ({fold_label})', 
+                  fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    fig4.savefig(os.path.join(gridsearch_dir, f'gridsearch_summary_{fold_label}.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig4)
+    
+    # Save gridsearch data to CSV
+    gridsearch_data = pd.DataFrame({
+        'lambda': lmdas,
+        'neg_log_lambda': neg_log_lambda,
+        'accuracy': accuracy,
+        'cv_loss': avg_losses
+    })
+    if roc_auc is not None:
+        gridsearch_data['auc_roc'] = roc_auc
+    gridsearch_data['is_best'] = np.arange(len(lmdas)) == best_idx
+    gridsearch_data.to_csv(os.path.join(gridsearch_dir, f'gridsearch_results_{fold_label}.csv'), index=False)
+    
+    logger.info(f"  Saved gridsearch plots and data for {fold_label} ({n_lambdas} lambda values)")
+
+
 def run_lasso_with_loo(
     X: pd.DataFrame,
     y: pd.Series,
@@ -1542,7 +1732,8 @@ def run_lasso_with_loo(
     logger: logging.Logger,
     participant_ids: Optional[pd.Index] = None,
     use_smote: bool = False,
-    smote_random_state: int = 42
+    smote_random_state: int = 42,
+    lmda_path_size: int = 100
 ) -> Dict[str, Any]:
     """
     Run Lasso classification with Leave-One-Out outer CV and inner k-fold CV for hyperparameter selection.
@@ -1568,6 +1759,7 @@ def run_lasso_with_loo(
         participant_ids: Optional participant IDs (uses index if not provided)
         use_smote: Whether to apply SMOTE to balance training data
         smote_random_state: Random state for SMOTE reproducibility
+        lmda_path_size: Number of lambda values in the regularization path (at least 50)
     
     Returns:
         Dictionary with predictions and evaluation results
@@ -1600,6 +1792,7 @@ def run_lasso_with_loo(
     logger.info(f"Class imbalance ratio: {class_counts.max() / class_counts.min():.2f}:1")
     logger.info(f"Inner CV folds: {inner_cv_folds}")
     logger.info(f"Outer CV: Leave-One-Out ({n_samples} iterations)")
+    logger.info(f"Lambda path size: {lmda_path_size} (regularization parameters)")
     logger.info(f"Threads: {n_threads}")
     logger.info(f"SMOTE: {'Enabled' if use_smote else 'Disabled'}")
     
@@ -1667,6 +1860,7 @@ def run_lasso_with_loo(
                 glm=glm_train,
                 seed=42 + i,
                 n_folds=inner_cv_folds,
+                lmda_path_size=lmda_path_size,  # At least 50 lambda values
                 min_ratio=0.01,
                 alpha=1.0,  # Pure L1
                 penalty=pf,
@@ -1781,6 +1975,7 @@ def run_lasso_with_loo(
             glm=glm_final,
             seed=42,
             n_folds=inner_cv_folds,
+            lmda_path_size=lmda_path_size,  # At least 50 lambda values
             min_ratio=0.01,
             alpha=1.0,
             penalty=pf,
@@ -1789,6 +1984,10 @@ def run_lasso_with_loo(
         )
         
         best_lambda_final = np.argmin(fit_final.test_error)
+        
+        # Save gridsearch plots for the final model
+        logger.info("Saving gridsearch parameter search plots...")
+        save_gridsearch_plots(fit_final, save_dir, logger, fold_label="final_model")
         
         model_final = grpnet(
             X=X_final_resampled,
@@ -1918,7 +2117,8 @@ def run_lasso_with_penalties(
     save_dir: str,
     n_threads: int,
     folds_cv: int,
-    logger: logging.Logger
+    logger: logging.Logger,
+    lmda_path_size: int = 100
 ) -> Dict[str, Any]:
     """
     Run Lasso classification with LLM-generated penalty factors.
@@ -1933,6 +2133,7 @@ def run_lasso_with_penalties(
         n_threads: Number of threads
         folds_cv: Number of CV folds
         logger: Logger instance
+        lmda_path_size: Number of lambda values in the regularization path (at least 50)
     
     Returns:
         Dictionary with evaluation results
@@ -1980,6 +2181,7 @@ def run_lasso_with_penalties(
     from llm_lasso.task_specific_lasso.llm_lasso import llm_lasso_cv, PenaltyType
     
     logger.info("Running LLM-Lasso CV...")
+    logger.info(f"Lambda path size: {lmda_path_size} (regularization parameters)")
     start_time = time.time()
     
     results = llm_lasso_cv(
@@ -1994,7 +2196,8 @@ def run_lasso_with_penalties(
         seed=42,
         n_threads=n_threads,
         alpha=1.0,  # Pure L1
-        max_imp_pow=5
+        max_imp_pow=5,
+        lmda_path_size=lmda_path_size
     )
     
     lasso_time = time.time() - start_time
@@ -2087,12 +2290,16 @@ class PipelineArguments:
     })
     
     # LLM options
+    llm_backend: str = field(default="openai", metadata={
+        "help": "LLM backend: openai (cloud API) or vllm (local open-source)",
+        "choices": ["openai", "vllm"]
+    })
     model_type: str = field(default="gpt-4o", metadata={
-        "help": "LLM model type: gpt-4o, o1, o1-pro, openrouter",
-        "choices": ["gpt-4o", "o1", "o1-pro", "openrouter"]
+        "help": "LLM model type: gpt-4o, o1, o1-pro, openrouter (for openai backend), or vllm model name",
+        "choices": ["gpt-4o", "o1", "o1-pro", "openrouter", "vllm"]
     })
     model_name: Optional[str] = field(default=None, metadata={
-        "help": "Specific model name (optional)"
+        "help": "Specific model name (optional). For vllm backend, defaults to VLLM_CHAT_MODEL env var."
     })
     temp: float = field(default=0.0, metadata={
         "help": "LLM temperature"
@@ -2136,6 +2343,9 @@ class PipelineArguments:
     })
     inner_cv_folds: int = field(default=10, metadata={
         "help": "Number of inner CV folds for hyperparameter selection (used with --use_loo)"
+    })
+    lmda_path_size: int = field(default=100, metadata={
+        "help": "Number of lambda (regularization) parameters to search over. Must be at least 50 for adequate grid search."
     })
     
     # Class imbalance handling
@@ -2254,7 +2464,8 @@ def main():
             pdf_vectorstore, embeddings = setup_pdf_vectorstore(
                 args.pdf_persist_directory,
                 args.pdf_collection_name,
-                logger
+                logger,
+                llm_backend=args.llm_backend
             )
         else:
             pdf_vectorstore = None
@@ -2276,7 +2487,8 @@ def main():
             batch_size=args.batch_size,
             pdf_rag_num_docs=args.pdf_rag_num_docs,
             wipe=args.wipe,
-            logger=logger
+            logger=logger,
+            llm_backend=args.llm_backend
         )
         
         # Step 6b: Save RAG retrieved documents with sources
@@ -2304,7 +2516,8 @@ def main():
                 logger=logger,
                 participant_ids=X_imputed.index,
                 use_smote=args.use_smote,
-                smote_random_state=args.smote_random_state
+                smote_random_state=args.smote_random_state,
+                lmda_path_size=args.lmda_path_size
             )
         else:
             # Use standard train/test split
@@ -2317,7 +2530,8 @@ def main():
                 save_dir=args.save_dir,
                 n_threads=args.n_threads,
                 folds_cv=args.folds_cv,
-                logger=logger
+                logger=logger,
+                lmda_path_size=args.lmda_path_size
             )
         
         # Pipeline complete
