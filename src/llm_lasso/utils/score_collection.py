@@ -123,35 +123,83 @@ def normalize_genenames(genenames):
 
 def extract_scores_from_responses(responses, genenames, dict=False):
     """
-    Extracts scores from LLM responses corresponding to the given gene names.
+    Extracts scores from LLM responses corresponding to the given feature names.
+
+    Supports multiple output formats:
+    1. **FeatureName**: 3 (markdown bold format)
+    2. Predictor: <name> | Penalty: <score> | Rationale: ... (pipe-delimited format)
+    3. <name>: <score> (simple colon format)
 
     Args:
         responses (list[str]): List of LLM responses as strings.
-        genenames (list[str]): List of gene names to filter scores.
-        dict (bool, optional): If True, returns a dictionary of gene names and their scores. Default is False.
+        genenames (list[str]): List of feature/gene names to filter scores.
+        dict (bool, optional): If True, returns a dictionary of names and their scores. Default is False.
 
     Returns:
         list[float or None] or dict[str, float or None]: A list of scores corresponding to the genenames in order, or a
-        dictionary mapping gene names to their scores if dict=True.
+        dictionary mapping names to their scores if dict=True.
     """
     # Normalize gene names
     normalized_genenames = normalize_genenames(genenames)
+    # Also keep original names for matching
+    original_to_normalized = {name.upper(): normalize_genenames([name])[0] for name in genenames}
     scores = {gene: None for gene in normalized_genenames}  # Initialize with None for all genes
     LARGE_NUMBER = 1e10  # Define a large number to replace infinity values
 
     for response in responses:
-        # Updated regex pattern to allow spaces within gene names
-        matches = re.findall(r"\*\*(.*?)\*\*:\s*(-?\d+(?:\.\d+)?|inf(?:inity)?|∞)", response, re.IGNORECASE)
+        # Pattern 1: **FeatureName**: score (markdown bold format)
+        matches_bold = re.findall(
+            r"\*\*(.*?)\*\*:\s*(-?\d+(?:\.\d+)?|inf(?:inity)?|∞)", 
+            response, re.IGNORECASE
+        )
+        
+        # Pattern 2: Predictor: <name> | Penalty: <score> (pipe-delimited format from prompts)
+        matches_pipe = re.findall(
+            r"Predictor:\s*(.*?)\s*\|\s*Penalty:\s*(-?\d+(?:\.\d+)?)", 
+            response, re.IGNORECASE
+        )
+        
+        # Pattern 3: <name> | Penalty: <score> (alternative pipe format)
+        matches_pipe_alt = re.findall(
+            r"^([^|]+?)\s*\|\s*Penalty:\s*(-?\d+(?:\.\d+)?)", 
+            response, re.IGNORECASE | re.MULTILINE
+        )
+        
+        # Pattern 4: Simple colon format - FeatureName: 3
+        matches_simple = re.findall(
+            r"^([A-Za-z0-9_\-\.\s]+?):\s*(-?\d+(?:\.\d+)?)\s*$", 
+            response, re.MULTILINE
+        )
+        
+        # Combine all matches
+        all_matches = matches_bold + matches_pipe + matches_pipe_alt + matches_simple
 
-        for gene, score in matches:
+        for gene, score in all_matches:
             # Normalize gene name from response
-            normalized_gene = gene.strip().replace('|', '').replace('/', '').replace('-', '').replace('.', '')
-
+            gene_clean = gene.strip()
+            normalized_gene = gene_clean.replace('|', '').replace('/', '').replace('-', '').replace('.', '')
+            
+            # Try direct normalized match
             if normalized_gene in normalized_genenames:
-                if score.lower() in {"inf", "infinity", "∞"}:
-                    scores[normalized_gene] = LARGE_NUMBER
-                else:
-                    scores[normalized_gene] = float(score)
+                match_key = normalized_gene
+            # Try uppercase match
+            elif normalized_gene.upper() in [g.upper() for g in normalized_genenames]:
+                match_key = next(g for g in normalized_genenames if g.upper() == normalized_gene.upper())
+            # Try original name match (case-insensitive)
+            elif gene_clean.upper() in original_to_normalized:
+                match_key = original_to_normalized[gene_clean.upper()]
+            else:
+                continue
+            
+            # Parse score value
+            score_str = str(score).lower()
+            if score_str in {"inf", "infinity", "∞"}:
+                scores[match_key] = LARGE_NUMBER
+            else:
+                try:
+                    scores[match_key] = float(score)
+                except ValueError:
+                    continue
 
     if dict:
         # Return as a dictionary

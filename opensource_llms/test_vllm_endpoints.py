@@ -63,8 +63,16 @@ def load_env_file():
 load_env_file()
 
 # Configuration (can be overridden via environment variables)
-CHAT_BASE_URL = os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
-EMBED_BASE_URL = os.environ.get("VLLM_EMBED_BASE_URL", "http://localhost:8001/v1")
+# Priority: CHAT_BASE_URL > VLLM_CHAT_BASE_URL > default
+# Priority: EMBED_BASE_URL > VLLM_EMBED_BASE_URL > default
+CHAT_BASE_URL = os.environ.get(
+    "CHAT_BASE_URL",
+    os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
+)
+EMBED_BASE_URL = os.environ.get(
+    "EMBED_BASE_URL",
+    os.environ.get("VLLM_EMBED_BASE_URL", "http://localhost:8001/v1")
+)
 CHAT_MODEL = os.environ.get("VLLM_CHAT_MODEL", "qwen3-thinking")
 EMBED_MODEL = os.environ.get("VLLM_EMBED_MODEL", "qwen3-embed")
 

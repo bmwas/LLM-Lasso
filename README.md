@@ -1433,11 +1433,36 @@ LLM-Lasso supports retrieval-augmented generation using local PDF documents (e.g
    ```
 
 2. **Create the Vector Store:**
+
+   **Option A: Using OpenAI Embeddings (default)**
    ```bash
-   python playground/interactive_pdf_RAG.py
+   # Requires OPENAI_API_KEY in .env
+   python scripts/index_pdf_vectorstore.py \
+       --pdf-directory ./sample_pdfs \
+       --persist-directory ./pdf_vectorstore \
+       --embedding-backend openai
    ```
+
+   **Option B: Using vLLM Embeddings (open-source)**
+   ```bash
+   # First, start the vLLM embedding service
+   docker compose --env-file .env -f opensource_llms/docker-compose.yml up
    
-   Follow the prompts to index your PDFs into ChromaDB.
+   # Then index with vLLM (uses Qwen3-Embedding-8B, 4096-dim embeddings)
+   python scripts/index_pdf_vectorstore.py \
+       --pdf-directory ./sample_pdfs \
+       --persist-directory ./pdf_vectorstore \
+       --embedding-backend vllm
+   ```
+
+   **Key Options:**
+   - `--chunk-size`: Text chunk size (default: 1000 chars)
+   - `--chunk-overlap`: Overlap between chunks (default: 200 chars)
+   - `--collection-name`: ChromaDB collection name (default: pdf_documents)
+   - `--no-filter-references`: Include reference sections (filtered by default)
+   - `--log-level DEBUG`: Verbose output
+
+   **IMPORTANT:** The indexer cleans (deletes) any existing vectorstore before creating a fresh index. Use `--no-clean` to append to an existing index instead.
 
 3. **Verify Indexed Documents:**
    ```bash
@@ -1452,16 +1477,136 @@ LLM-Lasso supports retrieval-augmented generation using local PDF documents (e.g
    ```
 
 4. **Run Pipeline with PDF RAG:**
+
+   **IMPORTANT:** Use the **same embedding backend** for indexing and pipeline execution!
+
    ```bash
+   # If indexed with OpenAI embeddings:
    python scripts/run_pbd_llm_lasso.py \
        --dataset_path /path/to/dataset.csv \
        --feature_names_path /path/to/features.txt \
        --prompt-filename prompts/my_prompt.txt \
        --target_column target_var \
        --category "My Research Domain" \
+       --llm-backend openai \
+       --pdf_rag \
+       --pdf_rag_num_docs 3
+
+   # If indexed with vLLM embeddings:
+   python scripts/run_pbd_llm_lasso.py \
+       --dataset_path /path/to/dataset.csv \
+       --feature_names_path /path/to/features.txt \
+       --prompt-filename prompts/my_prompt.txt \
+       --target_column target_var \
+       --category "My Research Domain" \
+       --llm-backend vllm \
        --pdf_rag \
        --pdf_rag_num_docs 3
    ```
+
+### Vectorstore Indexing Improvements
+
+**Recent Updates (2025):**
+
+The PDF vectorstore indexing system has been enhanced with the following improvements:
+
+#### 1. **Standalone Indexing Script**
+
+A new dedicated indexing script (`scripts/index_pdf_vectorstore.py`) provides a clean CLI interface for creating vectorstores:
+
+- **Unified interface** for both OpenAI and vLLM embedding backends
+- **Automatic cleanup** of existing indexes before recreating (ensures fresh, consistent indexes)
+- **Comprehensive logging** and progress reporting
+- **Connection testing** for vLLM endpoints before indexing begins
+- **Flexible configuration** via command-line arguments
+
+**Key Features:**
+- Supports both `openai` and `vllm` embedding backends
+- Automatically cleans existing vectorstore before indexing (use `--no-clean` to append)
+- Tests vLLM connection before starting (prevents wasted time on failed indexing)
+- Detailed logging with progress indicators
+- Validates PDF directory and file counts before processing
+
+#### 2. **Automatic Index Cleanup**
+
+**Before:** Re-indexing would append to existing collections, leading to duplicate documents and inconsistent indexes.
+
+**After:** By default, the indexer **automatically deletes** any existing vectorstore at the target directory before creating a fresh index. This ensures:
+- ✅ Clean, consistent indexes every time
+- ✅ No duplicate documents from previous runs
+- ✅ Predictable behavior for reproducibility
+- ✅ Option to append (`--no-clean`) when needed
+
+**Usage:**
+```bash
+# Default: Cleans existing index, creates fresh one
+python scripts/index_pdf_vectorstore.py \
+    --pdf-directory ./sample_pdfs \
+    --persist-directory ./pdf_vectorstore \
+    --embedding-backend vllm
+
+# Append mode: Adds to existing index (if it exists)
+python scripts/index_pdf_vectorstore.py \
+    --pdf-directory ./sample_pdfs \
+    --persist-directory ./pdf_vectorstore \
+    --embedding-backend vllm \
+    --no-clean
+```
+
+#### 3. **Embedding Backend Compatibility**
+
+The indexing system now fully supports both embedding backends with proper dimension handling:
+
+| Backend | Model | Embedding Dimension | Use Case |
+|---------|-------|---------------------|----------|
+| **OpenAI** | `text-embedding-ada-002` | 1536 | Cloud-based, fast, reliable |
+| **vLLM** | `Qwen3-Embedding-8B` | 4096 | Open-source, local, high-quality |
+
+**Important Notes:**
+- **ChromaDB handles both dimensions** without issues (no code changes needed)
+- **You MUST use the same backend** for indexing and querying
+- **vLLM embeddings are higher-dimensional** (4096 vs 1536), potentially capturing more semantic nuance
+- **Dimension mismatch detection**: The pipeline will fail if you try to query an OpenAI-indexed vectorstore with vLLM embeddings (or vice versa)
+
+#### 4. **Improved Error Handling**
+
+- **Connection validation**: Tests vLLM endpoint before starting indexing
+- **Clear error messages**: Provides actionable guidance when services are unavailable
+- **Graceful failures**: Stops early with helpful error messages rather than failing mid-process
+
+**Example Error Message:**
+```
+Failed to connect to vLLM embedding service at http://localhost:8001/v1: ...
+Make sure the vLLM embedding service is running:
+  docker compose --env-file .env -f opensource_llms/docker-compose.yml up
+```
+
+#### 5. **Migration from Old Workflow**
+
+**Old Method (deprecated):**
+```bash
+python playground/interactive_pdf_RAG.py  # Interactive, OpenAI-only
+```
+
+**New Method (recommended):**
+```bash
+# OpenAI
+python scripts/index_pdf_vectorstore.py \
+    --pdf-directory ./sample_pdfs \
+    --embedding-backend openai
+
+# vLLM
+python scripts/index_pdf_vectorstore.py \
+    --pdf-directory ./sample_pdfs \
+    --embedding-backend vllm
+```
+
+**Benefits:**
+- ✅ Scriptable (can be automated/CI)
+- ✅ Supports both backends
+- ✅ Better logging and progress reporting
+- ✅ Automatic cleanup prevents stale data
+- ✅ Non-interactive (better for batch processing)
 
 ### Document Retrieval Details
 
@@ -1626,23 +1771,38 @@ vectorstore = create_pdf_vectorstore(
 
 ```python
 from llm_lasso.llm_penalty.rag import create_pdf_vectorstore, load_pdf_vectorstore
-from langchain_openai import OpenAIEmbeddings
+from llm_lasso.llm_penalty.embeddings import get_embeddings
 
-# Create vectorstore from PDFs (with reference filtering enabled by default)
-embeddings = OpenAIEmbeddings()
+# Option 1: Using OpenAI embeddings
+embeddings = get_embeddings(backend="openai")
+
+# Option 2: Using vLLM embeddings (requires vLLM service running)
+embeddings = get_embeddings(backend="vllm")
+
+# Create vectorstore from PDFs
+# Note: clean_existing=True (default) deletes any existing vectorstore first
 vectorstore = create_pdf_vectorstore(
     pdf_directory="sample_pdfs",
     persist_directory="pdf_vectorstore",
     chunk_size=1000,
     chunk_overlap=200,
     embedding_model=embeddings,
-    filter_references=True  # Enabled by default - filters out bibliography sections
+    filter_references=True,  # Enabled by default - filters out bibliography sections
+    clean_existing=True      # Default: deletes existing index before creating fresh one
 )
 
-# Load existing vectorstore
+# To append to existing index instead of cleaning:
+vectorstore = create_pdf_vectorstore(
+    pdf_directory="sample_pdfs",
+    persist_directory="pdf_vectorstore",
+    embedding_model=embeddings,
+    clean_existing=False  # Append mode - adds to existing collection
+)
+
+# Load existing vectorstore (must use same embedding backend as when indexing)
 vectorstore = load_pdf_vectorstore(
     persist_directory="pdf_vectorstore",
-    embedding_model=embeddings
+    embedding_model=embeddings  # Must match the backend used during indexing
 )
 
 # Check statistics
@@ -1830,12 +1990,13 @@ LLM-Lasso/
 │   ├── .env.example       # Template for required environment variables
 │   └── test_vllm_endpoints.py  # Test script for verifying vLLM services
 ├── playground/            # Interactive scripts
-│   ├── interactive_pdf_RAG.py    # PDF vectorstore creation/querying
+│   ├── interactive_pdf_RAG.py    # Interactive PDF RAG (legacy, use scripts/index_pdf_vectorstore.py)
 │   └── view_all_documents.py     # Vectorstore inspection utility
 ├── prompts/               # LLM prompt templates
 ├── sample_pdfs/           # Directory for PDF documents
 ├── scripts/               # Pipeline execution scripts
 │   ├── run_pbd_llm_lasso.py      # Main pipeline script
+│   ├── index_pdf_vectorstore.py  # PDF vectorstore indexing (OpenAI/vLLM support)
 │   ├── visualize_rag_embeddings.py  # RAG document embedding visualization
 │   ├── llm_lasso_scores.py       # Penalty score generation
 │   ├── run_baselines.py          # Baseline methods

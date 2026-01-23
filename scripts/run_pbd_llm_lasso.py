@@ -377,7 +377,8 @@ def setup_pdf_vectorstore(
     # Check if vectorstore exists
     if not os.path.exists(persist_directory):
         logger.error(f"Vectorstore directory not found: {persist_directory}")
-        logger.error("Run 'python playground/interactive_pdf_RAG.py' to create the vectorstore first")
+        logger.error("Create the vectorstore first using:")
+        logger.error(f"  python scripts/index_pdf_vectorstore.py --pdf-directory /path/to/pdfs --persist-directory {persist_directory} --embedding-backend {llm_backend}")
         raise FileNotFoundError(f"Vectorstore directory not found: {persist_directory}")
     
     from llm_lasso.llm_penalty.rag import load_pdf_vectorstore
@@ -388,9 +389,20 @@ def setup_pdf_vectorstore(
         logger.info("Initializing vLLM embeddings...")
         
         # Check for vLLM configuration
-        vllm_embed_url = os.environ.get("VLLM_EMBED_BASE_URL", "http://localhost:8001/v1")
+        # Priority: EMBED_BASE_URL > VLLM_EMBED_BASE_URL > default
+        vllm_embed_url = os.environ.get(
+            "EMBED_BASE_URL",
+            os.environ.get("VLLM_EMBED_BASE_URL", "http://localhost:8001/v1")
+        )
         vllm_model = os.environ.get("VLLM_EMBED_MODEL", "qwen3-embed")
-        logger.info(f"vLLM Embed URL: {vllm_embed_url}")
+        
+        # Log which env var was used
+        if "EMBED_BASE_URL" in os.environ:
+            logger.info(f"vLLM Embed URL: {vllm_embed_url} (from EMBED_BASE_URL)")
+        elif "VLLM_EMBED_BASE_URL" in os.environ:
+            logger.info(f"vLLM Embed URL: {vllm_embed_url} (from VLLM_EMBED_BASE_URL)")
+        else:
+            logger.info(f"vLLM Embed URL: {vllm_embed_url} (default)")
         logger.info(f"vLLM Embed Model: {vllm_model}")
         
         start_time = time.time()
@@ -526,8 +538,20 @@ def generate_llm_penalties(
         else:
             actual_model_name = os.environ.get("VLLM_CHAT_MODEL", "qwen3-thinking")
         
-        vllm_url = os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
-        logger.info(f"vLLM Chat URL: {vllm_url}")
+        # Check multiple environment variable names for flexibility
+        # Priority: CHAT_BASE_URL > VLLM_CHAT_BASE_URL > default
+        vllm_url = os.environ.get(
+            "CHAT_BASE_URL",
+            os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
+        )
+        
+        # Log which env var was used
+        if "CHAT_BASE_URL" in os.environ:
+            logger.info(f"vLLM Chat URL: {vllm_url} (from CHAT_BASE_URL)")
+        elif "VLLM_CHAT_BASE_URL" in os.environ:
+            logger.info(f"vLLM Chat URL: {vllm_url} (from VLLM_CHAT_BASE_URL)")
+        else:
+            logger.info(f"vLLM Chat URL: {vllm_url} (default)")
         logger.info(f"vLLM Chat Model: {actual_model_name}")
     else:
         # OpenAI backend (default)
@@ -614,6 +638,46 @@ def generate_llm_penalties(
     with open(scores_file, 'w') as f:
         json.dump(score_dict, f, indent=2)
     logger.info(f"Penalty scores saved to: {scores_file}")
+    
+    # Save detailed LLM reasoning log
+    reasoning_log_file = os.path.join(save_dir, "penalty_llm_reasoning.log")
+    with open(reasoning_log_file, 'w') as f:
+        f.write("=" * 80 + "\n")
+        f.write("LLM PENALTY FACTOR REASONING LOG\n")
+        f.write("=" * 80 + "\n")
+        f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"LLM Backend: {llm_backend}\n")
+        f.write(f"Model: {model_type}\n")
+        f.write(f"Category: {category}\n")
+        f.write(f"Features: {len(feature_names)}\n")
+        f.write(f"Prompt file: {prompt_file}\n")
+        f.write("=" * 80 + "\n\n")
+        
+        # Summary table
+        f.write("PENALTY FACTOR SUMMARY\n")
+        f.write("-" * 60 + "\n")
+        f.write(f"{'Feature':<45} {'Penalty':>8}\n")
+        f.write("-" * 60 + "\n")
+        for name, score in score_dict.items():
+            f.write(f"{name:<45} {score:>8.1f}\n")
+        f.write("-" * 60 + "\n")
+        f.write(f"{'Mean':<45} {scores_array.mean():>8.2f}\n")
+        f.write(f"{'Min':<45} {scores_array.min():>8.2f}\n")
+        f.write(f"{'Max':<45} {scores_array.max():>8.2f}\n")
+        f.write(f"{'Std':<45} {scores_array.std():>8.2f}\n")
+        f.write("\n")
+        
+        # Full LLM responses with reasoning
+        f.write("=" * 80 + "\n")
+        f.write("DETAILED LLM REASONING\n")
+        f.write("=" * 80 + "\n\n")
+        
+        for i, response in enumerate(results):
+            f.write(f"--- BATCH {i + 1} ---\n")
+            f.write(response + "\n")
+            f.write("\n" + "-" * 40 + "\n\n")
+    
+    logger.info(f"LLM reasoning log saved to: {reasoning_log_file}")
     
     return {
         "scores": all_scores,
@@ -1729,7 +1793,7 @@ def save_gridsearch_plots(
         
         for ax, (metric, name, color) in zip(axes5.flat, metrics_data):
             if metric is not None:
-                ax.plot(neg_log_lambda, metric, f'{color[0]}-', linewidth=2, marker='o', markersize=2, alpha=0.7, color=color)
+                ax.plot(neg_log_lambda, metric, linestyle='-', linewidth=2, marker='o', markersize=2, alpha=0.7, color=color)
                 ax.axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
                 ax.scatter([-np.log10(best_lambda)], [metric[best_idx]], color='r', s=80, zorder=5)
                 ax.set_xlabel(r'$-\log_{10}(\lambda)$')

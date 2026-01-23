@@ -1,5 +1,7 @@
 ## These are my examples -
  
+Vector indexing -  python scripts/index_pdf_vectorstore.py  --pdf-directory /path/to/your/pdfs --persist-directory ./pdf_vectorstore  --embedding-backend vllm --log-level INFO
+
 Example 1: Using OpenAI Backend (with Grid Search)
 
 python scripts/run_pbd_llm_lasso.py --dataset_path /home/benson/Downloads/pbd_dataset/B1afocal.csv  --feature_names_path ./examples/example_data/pbd_focal_variables.txt    --prompt-filename prompts/pbd_normal.txt  --target_column target_var --category "Suicidal Ideation" --pdf_rag --use_loo --inner_cv_folds 10 --use_smote    --llm-backend openai --model-type gpt-4o    --lmda_path_size 100

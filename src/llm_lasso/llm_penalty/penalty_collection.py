@@ -109,7 +109,7 @@ def penalties_helper(
     else:
         # Fallback to general knowledge
         full_prompt = f"Using your best general knowledge, provide the most accurate and relevant answer to the question:\n\nQuestion: {query}"
-    system_message = "You are an expert assistant with access to gene and cancer knowledge."
+    system_message = "You are an expert assistant with domain knowledge for statistical modeling and feature selection."
 
     # Query the LLM, with special handling if the LLM allows
     # structured queries
@@ -244,7 +244,7 @@ def collect_penalties(
                 else:
                     # Fallback to general knowledge
                     full_prompt = f"Using your best general knowledge, provide the most accurate and relevant answer to the question:\n\nQuestion: {query}"
-                system_message = "You are an expert assistant with access to gene and cancer knowledge."
+                system_message = "You are an expert assistant with domain knowledge for statistical modeling and feature selection."
 
                 # Query the LLM, with special handling if the LLM allows
                 # structured queries

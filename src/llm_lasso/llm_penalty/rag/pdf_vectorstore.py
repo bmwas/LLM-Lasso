@@ -104,7 +104,8 @@ def create_pdf_vectorstore(
     page_chunks: bool = True,
     embedding_model: Optional[Embeddings] = None,
     collection_name: str = "pdf_documents",
-    filter_references: bool = True
+    filter_references: bool = True,
+    clean_existing: bool = True
 ) -> Chroma:
     """
     Create a ChromaDB vectorstore from PDF documents in a directory.
@@ -119,10 +120,14 @@ def create_pdf_vectorstore(
                         If None, creates default OpenAI embeddings.
         collection_name: Name for the ChromaDB collection.
         filter_references: If True, filter out reference/bibliography sections from indexing.
+        clean_existing: If True (default), delete any existing vectorstore at persist_directory
+                       before creating a new one. This ensures a clean index.
     
     Returns:
         Chroma vectorstore populated with PDF document chunks.
     """
+    import shutil
+    
     operation_id = hashlib.md5(f"{pdf_directory}{time.time()}".encode()).hexdigest()[:8]
     logger.info(f"[Op:{operation_id}] ===== CREATE VECTORSTORE =====")
     logger.info(f"[Op:{operation_id}] Starting vectorstore creation")
@@ -134,9 +139,21 @@ def create_pdf_vectorstore(
     logger.debug(f"  page_chunks: {page_chunks}")
     logger.debug(f"  collection_name: {collection_name}")
     logger.debug(f"  filter_references: {filter_references}")
+    logger.debug(f"  clean_existing: {clean_existing}")
     logger.debug(f"  embedding_model provided: {embedding_model is not None}")
     
     total_start = time.time()
+    
+    # Clean existing vectorstore if requested (default behavior)
+    if clean_existing and os.path.exists(persist_directory):
+        logger.info(f"[Op:{operation_id}] Cleaning existing vectorstore at {persist_directory}...")
+        print(f"Cleaning existing vectorstore at {persist_directory}...")
+        try:
+            shutil.rmtree(persist_directory)
+            logger.info(f"[Op:{operation_id}] Existing vectorstore deleted")
+        except Exception as e:
+            logger.error(f"[Op:{operation_id}] Failed to clean existing vectorstore: {e}")
+            raise RuntimeError(f"Failed to clean existing vectorstore at {persist_directory}: {e}")
     
     # Log PDF directory contents
     logger.info(f"[Op:{operation_id}] Scanning PDF directory...")
@@ -496,6 +513,17 @@ def get_or_create_pdf_vectorstore(
     
     if force_recreate:
         logger.info(f"[Op:{operation_id}] Force recreate requested")
+        # Delete existing vectorstore to ensure clean slate
+        if persist_exists:
+            logger.info(f"[Op:{operation_id}] Deleting existing vectorstore at {persist_directory}...")
+            import shutil
+            try:
+                shutil.rmtree(persist_directory)
+                logger.info(f"[Op:{operation_id}] Existing vectorstore deleted successfully")
+                print(f"Deleted existing vectorstore at {persist_directory}")
+            except Exception as e:
+                logger.error(f"[Op:{operation_id}] Failed to delete existing vectorstore: {e}")
+                raise RuntimeError(f"Failed to delete existing vectorstore: {e}")
     
     # Create new vectorstore
     logger.info(f"[Op:{operation_id}] Creating new vectorstore...")

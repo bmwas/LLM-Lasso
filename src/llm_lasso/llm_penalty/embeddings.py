@@ -5,8 +5,8 @@ This module provides support for multiple embedding backends:
 - OpenAI: Uses langchain_openai.OpenAIEmbeddings
 - vLLM: Uses local vLLM server with OpenAI-compatible API
 
-Configuration for vLLM is done via environment variables:
-    - VLLM_EMBED_BASE_URL: Base URL for vLLM embeddings endpoint (default: http://localhost:8001/v1)
+Configuration for vLLM is done via environment variables (checked in order):
+    - EMBED_BASE_URL or VLLM_EMBED_BASE_URL: Base URL for vLLM embeddings endpoint (default: http://localhost:8001/v1)
     - VLLM_API_KEY: API key for authentication (if configured in vLLM)
     - VLLM_EMBED_MODEL: Model name served by vLLM (default: qwen3-embed)
 
@@ -46,7 +46,8 @@ class VLLMEmbeddings(Embeddings):
     the use of open-source embedding models like Qwen3-Embedding.
     
     Configuration is done via environment variables or constructor arguments:
-        - VLLM_EMBED_BASE_URL: Base URL for vLLM embeddings endpoint
+        - EMBED_BASE_URL or VLLM_EMBED_BASE_URL: Base URL for vLLM embeddings endpoint
+          (EMBED_BASE_URL takes priority if both are set)
         - VLLM_API_KEY: API key for authentication (optional)
         - VLLM_EMBED_MODEL: Model name served by vLLM
     
@@ -73,8 +74,11 @@ class VLLMEmbeddings(Embeddings):
             model: Model name. Defaults to VLLM_EMBED_MODEL env var or qwen3-embed.
             timeout: Request timeout in seconds (default: 300 for large batches).
         """
+        # Check multiple environment variable names for flexibility
+        # Priority: EMBED_BASE_URL > VLLM_EMBED_BASE_URL > default
         self.base_url = base_url or os.environ.get(
-            "VLLM_EMBED_BASE_URL", "http://localhost:8001/v1"
+            "EMBED_BASE_URL", 
+            os.environ.get("VLLM_EMBED_BASE_URL", "http://localhost:8001/v1")
         )
         self.api_key = api_key or os.environ.get("VLLM_API_KEY", "")
         self.model = model or os.environ.get("VLLM_EMBED_MODEL", "qwen3-embed")

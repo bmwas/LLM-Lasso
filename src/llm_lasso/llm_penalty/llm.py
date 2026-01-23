@@ -256,13 +256,12 @@ class LLMQueryWrapperWithMemory:
             response = self.chat(messages)
             output = response.content
         elif self.llm_type == LLMType.VLLM:
-            # vLLM backend - serialize messages and query
+            # vLLM backend - use OpenAI-compatible chat format with proper roles
             messages = [
-                SystemMessage(content=system_message),
-                HumanMessage(content=full_prompt)
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": full_prompt}
             ]
-            serialized_prompt = "\n".join([f"{msg.content}" for msg in messages])
-            output = self.chat(serialized_prompt)
+            output = self.chat.invoke_chat(messages)
         else:
             messages = [
                 SystemMessage(content=system_message),
@@ -416,7 +415,8 @@ class VLLMLLM(LLM):
     open-source models like Qwen, LLaMA, etc.
 
     Configuration is done via environment variables:
-        - VLLM_CHAT_BASE_URL: Base URL for vLLM chat endpoint (default: http://localhost:8000/v1)
+        - CHAT_BASE_URL or VLLM_CHAT_BASE_URL: Base URL for vLLM chat endpoint (default: http://localhost:8000/v1)
+          (CHAT_BASE_URL takes priority if both are set)
         - VLLM_API_KEY: API key for authentication (if configured in vLLM)
         - VLLM_CHAT_MODEL: Model name served by vLLM (default: qwen3-thinking)
 
@@ -449,8 +449,12 @@ class VLLMLLM(LLM):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Read configuration from environment variables with defaults
+        # Priority: CHAT_BASE_URL > VLLM_CHAT_BASE_URL > default
         if not self.base_url:
-            self.base_url = os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
+            self.base_url = os.environ.get(
+                "CHAT_BASE_URL",
+                os.environ.get("VLLM_CHAT_BASE_URL", "http://localhost:8000/v1")
+            )
         if not self.api_key:
             self.api_key = os.environ.get("VLLM_API_KEY", "")
         if not self.model:
@@ -512,6 +516,76 @@ class VLLMLLM(LLM):
                         for token in stop:
                             content = content.split(token)[0]
 
+                    return content
+                else:
+                    raise ValueError(f"vLLM Error {response.status_code}: {response.text}")
+
+            except (requests.exceptions.RequestException, ValueError) as e:
+                print(f"vLLM attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    print(f"Retrying in {retry_delay} seconds...")
+                    time.sleep(retry_delay)
+                else:
+                    print("All vLLM retry attempts failed.")
+                    raise
+
+    def invoke_chat(
+        self,
+        messages: list[dict],
+        stop: list[str] = None,
+        **kwargs: any,
+    ) -> str:
+        """
+        Run the LLM with a list of messages in OpenAI-compatible format.
+        
+        This method properly handles system and user roles, mirroring OpenAI's
+        chat completions API format.
+
+        Args:
+            messages: List of message dicts with 'role' and 'content' keys.
+                      Example: [{"role": "system", "content": "..."}, {"role": "user", "content": "..."}]
+            stop: Stop words to use when generating.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            The model output as a string.
+        """
+        max_retries = kwargs.get("max_retries", MAX_RETRIES)
+        retry_delay = kwargs.get("retry_delay", RETRY_DELAY)
+
+        # Build URL for chat completions endpoint
+        url = f"{self.base_url.rstrip('/')}/chat/completions"
+
+        # Build headers
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # Build request payload - same format as OpenAI
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "top_p": self.top_p,
+            "temperature": self.temperature,
+            "repetition_penalty": self.repetition_penalty,
+        }
+        
+        # Add stop tokens if provided
+        if stop:
+            payload["stop"] = stop
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.post(
+                    url=url,
+                    headers=headers,
+                    data=json.dumps(payload),
+                    timeout=300  # 5 minute timeout for large model responses
+                )
+
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result.get("choices", [{}])[0].get("message", {}).get("content", "")
                     return content
                 else:
                     raise ValueError(f"vLLM Error {response.status_code}: {response.text}")
