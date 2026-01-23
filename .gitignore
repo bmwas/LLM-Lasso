@@ -61,3 +61,4 @@ omim_vectorstore/
 ./deep_pdfs/
 **/deep_pdfs
 deep_pdfs/
+**./deep_pdfs/**
