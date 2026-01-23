@@ -647,7 +647,7 @@ def generate_llm_penalties(
         f.write("=" * 80 + "\n")
         f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         f.write(f"LLM Backend: {llm_backend}\n")
-        f.write(f"Model: {model_type}\n")
+        f.write(f"Model: {actual_model_name}\n")
         f.write(f"Category: {category}\n")
         f.write(f"Features: {len(feature_names)}\n")
         f.write(f"Prompt file: {prompt_file}\n")
