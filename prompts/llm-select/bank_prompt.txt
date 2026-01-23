@@ -28,6 +28,6 @@ Provide a score and reasoning for features
 
 formatted according to the output schema above:
 
-The features are {genes}.
+The features are {factors}.
 
 

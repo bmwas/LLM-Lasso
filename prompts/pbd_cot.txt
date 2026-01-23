@@ -66,7 +66,7 @@ D) **Final bounds**: ensure all penalties are integers in [2, 5].
 1) Output predictors in the **exact same order** as `{factors}`.
 2) For each predictor, output:
    - Penalty (2–5)
-   - Confidence label {High, Medium, Low} based ONLY on name clarity:
+   - Confidence label (High, Medium, Low) based ONLY on name clarity:
      - High = SI/self-harm explicitly in name
      - Medium = clearly clinical construct in name but not SI
      - Low = ambiguous/unclear name

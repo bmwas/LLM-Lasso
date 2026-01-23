@@ -1575,7 +1575,8 @@ def save_gridsearch_plots(
     cv_result,
     save_dir: str,
     logger: logging.Logger,
-    fold_label: str = "final"
+    fold_label: str = "final",
+    optimize_metric: str = "accuracy"
 ) -> None:
     """
     Save gridsearch parameter search plots showing lambda vs metrics.
@@ -1585,6 +1586,7 @@ def save_gridsearch_plots(
         save_dir: Directory to save plots (gridsearch subfolder will be created)
         logger: Logger instance
         fold_label: Label for this gridsearch (e.g., "final", "fold_1")
+        optimize_metric: Metric used for hyperparameter optimization (for highlighting)
     """
     # Create gridsearch subfolder
     gridsearch_dir = os.path.join(save_dir, "gridsearch")
@@ -1599,7 +1601,13 @@ def save_gridsearch_plots(
     # Get AUC-ROC if available
     roc_auc = cv_result.roc_auc if cv_result.roc_auc is not None else None
     
-    # Get best lambda index
+    # Get extended metrics if available
+    sensitivity = cv_result.sensitivity if hasattr(cv_result, 'sensitivity') and cv_result.sensitivity is not None else None
+    specificity = cv_result.specificity if hasattr(cv_result, 'specificity') and cv_result.specificity is not None else None
+    balanced_accuracy = cv_result.balanced_accuracy if hasattr(cv_result, 'balanced_accuracy') and cv_result.balanced_accuracy is not None else None
+    f1 = cv_result.f1 if hasattr(cv_result, 'f1') and cv_result.f1 is not None else None
+    
+    # Get best lambda index (this should already use the optimize_metric)
     best_idx = cv_result.best_idx
     best_lambda = lmdas[best_idx]
     
@@ -1607,6 +1615,7 @@ def save_gridsearch_plots(
     neg_log_lambda = -np.log10(lmdas)
     
     logger.info(f"Saving gridsearch plots ({n_lambdas} lambda values) to {gridsearch_dir}")
+    logger.info(f"  Optimization metric: {optimize_metric}")
     
     # Plot 1: Lambda vs Accuracy
     fig1, ax1 = plt.subplots(figsize=(10, 6))
@@ -1707,6 +1716,41 @@ def save_gridsearch_plots(
     fig4.savefig(os.path.join(gridsearch_dir, f'gridsearch_summary_{fold_label}.png'), dpi=150, bbox_inches='tight')
     plt.close(fig4)
     
+    # Plot 5: Extended metrics (sensitivity, specificity, balanced accuracy, F1) if available
+    if sensitivity is not None and specificity is not None:
+        fig5, axes5 = plt.subplots(2, 2, figsize=(14, 10))
+        
+        metrics_data = [
+            (sensitivity, 'Sensitivity', 'darkorange'),
+            (specificity, 'Specificity', 'purple'),
+            (balanced_accuracy, 'Balanced Accuracy', 'teal'),
+            (f1, 'F1 Score', 'brown')
+        ]
+        
+        for ax, (metric, name, color) in zip(axes5.flat, metrics_data):
+            if metric is not None:
+                ax.plot(neg_log_lambda, metric, f'{color[0]}-', linewidth=2, marker='o', markersize=2, alpha=0.7, color=color)
+                ax.axvline(x=-np.log10(best_lambda), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+                ax.scatter([-np.log10(best_lambda)], [metric[best_idx]], color='r', s=80, zorder=5)
+                ax.set_xlabel(r'$-\log_{10}(\lambda)$')
+                ax.set_ylabel(name)
+                ax.set_title(f'{name} (at best λ: {metric[best_idx]:.4f})')
+                ax.grid(True, alpha=0.3)
+                ax.set_ylim([0, 1.05])
+                
+                # Highlight if this is the optimization metric
+                if name.lower().replace(' ', '_') == optimize_metric:
+                    ax.set_title(f'{name} (at best λ: {metric[best_idx]:.4f}) ★ OPTIMIZED', color='red')
+            else:
+                ax.text(0.5, 0.5, f'{name}\nNot Available', ha='center', va='center', fontsize=12)
+                ax.set_xlabel(r'$-\log_{10}(\lambda)$')
+        
+        fig5.suptitle(f'Extended Metrics: {n_lambdas} Lambda Values ({fold_label})\nOptimization Metric: {optimize_metric}', 
+                      fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        fig5.savefig(os.path.join(gridsearch_dir, f'extended_metrics_{fold_label}.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig5)
+    
     # Save gridsearch data to CSV
     gridsearch_data = pd.DataFrame({
         'lambda': lmdas,
@@ -1716,10 +1760,482 @@ def save_gridsearch_plots(
     })
     if roc_auc is not None:
         gridsearch_data['auc_roc'] = roc_auc
+    if sensitivity is not None:
+        gridsearch_data['sensitivity'] = sensitivity
+    if specificity is not None:
+        gridsearch_data['specificity'] = specificity
+    if balanced_accuracy is not None:
+        gridsearch_data['balanced_accuracy'] = balanced_accuracy
+    if f1 is not None:
+        gridsearch_data['f1'] = f1
     gridsearch_data['is_best'] = np.arange(len(lmdas)) == best_idx
+    gridsearch_data['optimize_metric'] = optimize_metric
     gridsearch_data.to_csv(os.path.join(gridsearch_dir, f'gridsearch_results_{fold_label}.csv'), index=False)
     
     logger.info(f"  Saved gridsearch plots and data for {fold_label} ({n_lambdas} lambda values)")
+
+
+def save_loo_gridsearch_plots(
+    loo_gridsearch_results: List[Dict],
+    save_dir: str,
+    logger: logging.Logger,
+    max_individual_plots: Optional[int] = None,
+    optimize_metric: str = "accuracy"
+) -> None:
+    """
+    Save gridsearch plots for LOO folds: individual fold plots and aggregate summary.
+    
+    Args:
+        loo_gridsearch_results: List of dicts with gridsearch results from each LOO fold
+        save_dir: Directory to save plots
+        logger: Logger instance
+        max_individual_plots: Maximum number of individual fold plots to save. 
+                              If None, saves ALL folds. Set a limit to avoid too many files.
+        optimize_metric: Metric used for hyperparameter optimization (for highlighting)
+    """
+    if not loo_gridsearch_results:
+        logger.warning("No LOO gridsearch results to save")
+        return
+    
+    # Create gridsearch subfolder with loo_folds subfolder
+    gridsearch_dir = os.path.join(save_dir, "gridsearch")
+    loo_folds_dir = os.path.join(gridsearch_dir, "loo_folds")
+    os.makedirs(loo_folds_dir, exist_ok=True)
+    
+    n_folds = len(loo_gridsearch_results)
+    logger.info(f"  Saving gridsearch results for {n_folds} LOO folds...")
+    
+    # Get common lambda values (assuming all folds use the same lambda path)
+    lmdas = loo_gridsearch_results[0]['lmdas']
+    n_lambdas = len(lmdas)
+    neg_log_lambda = -np.log10(lmdas)
+    
+    # Collect metrics across all folds
+    all_accuracy = []
+    all_auc = []
+    all_loss = []
+    all_best_lambdas = []
+    all_sensitivity = []
+    all_specificity = []
+    all_balanced_accuracy = []
+    all_f1 = []
+    
+    for result in loo_gridsearch_results:
+        accuracy = 1.0 - result['test_error']  # Convert Hamming loss to accuracy
+        all_accuracy.append(accuracy)
+        all_loss.append(result['avg_losses'])
+        all_best_lambdas.append(result['best_lambda'])
+        
+        if result['roc_auc'] is not None:
+            all_auc.append(result['roc_auc'])
+        
+        # Collect extended metrics if available
+        if result.get('sensitivity') is not None:
+            all_sensitivity.append(result['sensitivity'])
+        if result.get('specificity') is not None:
+            all_specificity.append(result['specificity'])
+        if result.get('balanced_accuracy') is not None:
+            all_balanced_accuracy.append(result['balanced_accuracy'])
+        if result.get('f1') is not None:
+            all_f1.append(result['f1'])
+    
+    all_accuracy = np.array(all_accuracy)  # Shape: (n_folds, n_lambdas)
+    all_loss = np.array(all_loss)
+    all_auc = np.array(all_auc) if all_auc else None
+    
+    # Compute mean and std across folds
+    mean_accuracy = np.mean(all_accuracy, axis=0)
+    std_accuracy = np.std(all_accuracy, axis=0)
+    mean_loss = np.mean(all_loss, axis=0)
+    std_loss = np.std(all_loss, axis=0)
+    
+    if all_auc is not None and len(all_auc) > 0:
+        mean_auc = np.mean(all_auc, axis=0)
+        std_auc = np.std(all_auc, axis=0)
+    else:
+        mean_auc = None
+        std_auc = None
+    
+    # Aggregate extended metrics
+    if len(all_sensitivity) > 0:
+        mean_sensitivity = np.mean(np.array(all_sensitivity), axis=0)
+        std_sensitivity = np.std(np.array(all_sensitivity), axis=0)
+    else:
+        mean_sensitivity = None
+        std_sensitivity = None
+        
+    if len(all_specificity) > 0:
+        mean_specificity = np.mean(np.array(all_specificity), axis=0)
+        std_specificity = np.std(np.array(all_specificity), axis=0)
+    else:
+        mean_specificity = None
+        std_specificity = None
+        
+    if len(all_balanced_accuracy) > 0:
+        mean_balanced_accuracy = np.mean(np.array(all_balanced_accuracy), axis=0)
+        std_balanced_accuracy = np.std(np.array(all_balanced_accuracy), axis=0)
+    else:
+        mean_balanced_accuracy = None
+        std_balanced_accuracy = None
+        
+    if len(all_f1) > 0:
+        mean_f1 = np.mean(np.array(all_f1), axis=0)
+        std_f1 = np.std(np.array(all_f1), axis=0)
+    else:
+        mean_f1 = None
+        std_f1 = None
+    
+    # Find the optimal lambda based on mean accuracy
+    best_idx_aggregate = np.argmax(mean_accuracy)
+    best_lambda_aggregate = lmdas[best_idx_aggregate]
+    
+    # ==================== AGGREGATE PLOTS ====================
+    
+    # Plot 1: Aggregate Accuracy with confidence band
+    fig1, ax1 = plt.subplots(figsize=(12, 7))
+    
+    # Plot individual fold traces (light gray)
+    for i, acc in enumerate(all_accuracy):
+        ax1.plot(neg_log_lambda, acc, color='lightgray', linewidth=0.5, alpha=0.5)
+    
+    # Plot mean with confidence band
+    ax1.fill_between(neg_log_lambda, mean_accuracy - std_accuracy, mean_accuracy + std_accuracy,
+                     alpha=0.3, color='blue', label='±1 std')
+    ax1.plot(neg_log_lambda, mean_accuracy, 'b-', linewidth=2.5, label=f'Mean (n={n_folds} folds)')
+    
+    # Mark best lambda
+    ax1.axvline(x=-np.log10(best_lambda_aggregate), color='r', linestyle='--', linewidth=1.5,
+                label=f'Best λ = {best_lambda_aggregate:.2e}')
+    ax1.scatter([-np.log10(best_lambda_aggregate)], [mean_accuracy[best_idx_aggregate]], 
+                color='r', s=100, zorder=5, label=f'Best Accuracy = {mean_accuracy[best_idx_aggregate]:.4f}')
+    
+    ax1.set_xlabel(r'$-\log_{10}(\lambda)$', fontsize=12)
+    ax1.set_ylabel('Accuracy', fontsize=12)
+    ax1.set_title(f'LOO Cross-Validation: Lambda vs Accuracy\n(Aggregated across {n_folds} folds, {n_lambdas} λ values)', 
+                  fontsize=14, fontweight='bold')
+    ax1.legend(loc='best')
+    ax1.grid(True, alpha=0.3)
+    ax1.set_ylim([0, 1.05])
+    plt.tight_layout()
+    fig1.savefig(os.path.join(gridsearch_dir, 'lambda_vs_accuracy_loo_aggregate.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig1)
+    
+    # Plot 2: Aggregate AUC-ROC (if available)
+    if mean_auc is not None:
+        fig2, ax2 = plt.subplots(figsize=(12, 7))
+        
+        for i, auc in enumerate(all_auc):
+            ax2.plot(neg_log_lambda, auc, color='lightgray', linewidth=0.5, alpha=0.5)
+        
+        ax2.fill_between(neg_log_lambda, mean_auc - std_auc, mean_auc + std_auc,
+                         alpha=0.3, color='green', label='±1 std')
+        ax2.plot(neg_log_lambda, mean_auc, 'g-', linewidth=2.5, label=f'Mean (n={n_folds} folds)')
+        
+        ax2.axvline(x=-np.log10(best_lambda_aggregate), color='r', linestyle='--', linewidth=1.5)
+        ax2.scatter([-np.log10(best_lambda_aggregate)], [mean_auc[best_idx_aggregate]], 
+                    color='r', s=100, zorder=5)
+        
+        ax2.set_xlabel(r'$-\log_{10}(\lambda)$', fontsize=12)
+        ax2.set_ylabel('AUC-ROC', fontsize=12)
+        ax2.set_title(f'LOO Cross-Validation: Lambda vs AUC-ROC\n(Aggregated across {n_folds} folds)', 
+                      fontsize=14, fontweight='bold')
+        ax2.legend(loc='best')
+        ax2.grid(True, alpha=0.3)
+        ax2.set_ylim([0, 1.05])
+        plt.tight_layout()
+        fig2.savefig(os.path.join(gridsearch_dir, 'lambda_vs_auc_loo_aggregate.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig2)
+    
+    # Plot 3: Aggregate CV Loss
+    fig3, ax3 = plt.subplots(figsize=(12, 7))
+    
+    for i, loss in enumerate(all_loss):
+        ax3.plot(neg_log_lambda, loss, color='lightgray', linewidth=0.5, alpha=0.5)
+    
+    ax3.fill_between(neg_log_lambda, mean_loss - std_loss, mean_loss + std_loss,
+                     alpha=0.3, color='purple', label='±1 std')
+    ax3.plot(neg_log_lambda, mean_loss, 'm-', linewidth=2.5, label=f'Mean (n={n_folds} folds)')
+    
+    best_loss_idx = np.argmin(mean_loss)
+    ax3.axvline(x=-np.log10(lmdas[best_loss_idx]), color='r', linestyle='--', linewidth=1.5,
+                label=f'Best λ = {lmdas[best_loss_idx]:.2e}')
+    ax3.scatter([-np.log10(lmdas[best_loss_idx])], [mean_loss[best_loss_idx]], 
+                color='r', s=100, zorder=5, label=f'Min Loss = {mean_loss[best_loss_idx]:.4f}')
+    
+    ax3.set_xlabel(r'$-\log_{10}(\lambda)$', fontsize=12)
+    ax3.set_ylabel('CV Loss', fontsize=12)
+    ax3.set_title(f'LOO Cross-Validation: Lambda vs CV Loss\n(Aggregated across {n_folds} folds)', 
+                  fontsize=14, fontweight='bold')
+    ax3.legend(loc='best')
+    ax3.grid(True, alpha=0.3)
+    plt.tight_layout()
+    fig3.savefig(os.path.join(gridsearch_dir, 'lambda_vs_loss_loo_aggregate.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig3)
+    
+    # Plot 4: Combined summary for LOO aggregate
+    fig4, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Accuracy
+    axes[0].fill_between(neg_log_lambda, mean_accuracy - std_accuracy, mean_accuracy + std_accuracy,
+                         alpha=0.3, color='blue')
+    axes[0].plot(neg_log_lambda, mean_accuracy, 'b-', linewidth=2)
+    axes[0].axvline(x=-np.log10(best_lambda_aggregate), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+    axes[0].scatter([-np.log10(best_lambda_aggregate)], [mean_accuracy[best_idx_aggregate]], color='r', s=80, zorder=5)
+    axes[0].set_xlabel(r'$-\log_{10}(\lambda)$')
+    axes[0].set_ylabel('Accuracy (mean ± std)')
+    axes[0].set_title(f'Accuracy\nBest: {mean_accuracy[best_idx_aggregate]:.3f}±{std_accuracy[best_idx_aggregate]:.3f}')
+    axes[0].grid(True, alpha=0.3)
+    axes[0].set_ylim([0, 1.05])
+    
+    # AUC-ROC
+    if mean_auc is not None:
+        axes[1].fill_between(neg_log_lambda, mean_auc - std_auc, mean_auc + std_auc,
+                             alpha=0.3, color='green')
+        axes[1].plot(neg_log_lambda, mean_auc, 'g-', linewidth=2)
+        axes[1].axvline(x=-np.log10(best_lambda_aggregate), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+        axes[1].scatter([-np.log10(best_lambda_aggregate)], [mean_auc[best_idx_aggregate]], color='r', s=80, zorder=5)
+        axes[1].set_ylabel('AUC-ROC (mean ± std)')
+        axes[1].set_title(f'AUC-ROC\nAt best λ: {mean_auc[best_idx_aggregate]:.3f}±{std_auc[best_idx_aggregate]:.3f}')
+        axes[1].set_ylim([0, 1.05])
+    else:
+        axes[1].text(0.5, 0.5, 'AUC-ROC\nNot Available', ha='center', va='center', fontsize=12)
+    axes[1].set_xlabel(r'$-\log_{10}(\lambda)$')
+    axes[1].grid(True, alpha=0.3)
+    
+    # CV Loss
+    axes[2].fill_between(neg_log_lambda, mean_loss - std_loss, mean_loss + std_loss,
+                         alpha=0.3, color='purple')
+    axes[2].plot(neg_log_lambda, mean_loss, 'm-', linewidth=2)
+    axes[2].axvline(x=-np.log10(lmdas[best_loss_idx]), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+    axes[2].scatter([-np.log10(lmdas[best_loss_idx])], [mean_loss[best_loss_idx]], color='r', s=80, zorder=5)
+    axes[2].set_xlabel(r'$-\log_{10}(\lambda)$')
+    axes[2].set_ylabel('CV Loss (mean ± std)')
+    axes[2].set_title(f'CV Loss\nMin: {mean_loss[best_loss_idx]:.4f}±{std_loss[best_loss_idx]:.4f}')
+    axes[2].grid(True, alpha=0.3)
+    
+    fig4.suptitle(f'LOO Grid Search Summary: {n_folds} Folds × {n_lambdas} Lambda Values\nOptimization Metric: {optimize_metric}', 
+                  fontsize=14, fontweight='bold', y=1.02)
+    plt.tight_layout()
+    fig4.savefig(os.path.join(gridsearch_dir, 'gridsearch_summary_loo_aggregate.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig4)
+    
+    # Plot 4b: Extended metrics (sensitivity, specificity, balanced_accuracy, f1) if available
+    if mean_sensitivity is not None and mean_specificity is not None:
+        fig4b, axes4b = plt.subplots(2, 2, figsize=(14, 10))
+        
+        ext_metrics_data = [
+            (mean_sensitivity, std_sensitivity, 'Sensitivity', 'darkorange'),
+            (mean_specificity, std_specificity, 'Specificity', 'purple'),
+            (mean_balanced_accuracy, std_balanced_accuracy, 'Balanced Accuracy', 'teal'),
+            (mean_f1, std_f1, 'F1 Score', 'brown')
+        ]
+        
+        for ax, (mean_metric, std_metric, name, color) in zip(axes4b.flat, ext_metrics_data):
+            if mean_metric is not None:
+                ax.fill_between(neg_log_lambda, mean_metric - std_metric, mean_metric + std_metric,
+                               alpha=0.3, color=color)
+                ax.plot(neg_log_lambda, mean_metric, '-', linewidth=2, color=color, label=f'Mean (n={n_folds})')
+                ax.axvline(x=-np.log10(best_lambda_aggregate), color='r', linestyle='--', linewidth=1.5, alpha=0.7)
+                ax.scatter([-np.log10(best_lambda_aggregate)], [mean_metric[best_idx_aggregate]], 
+                          color='r', s=80, zorder=5)
+                ax.set_xlabel(r'$-\log_{10}(\lambda)$')
+                ax.set_ylabel(f'{name} (mean ± std)')
+                title = f'{name}\nAt best λ: {mean_metric[best_idx_aggregate]:.3f}±{std_metric[best_idx_aggregate]:.3f}'
+                
+                # Highlight if this is the optimization metric
+                if name.lower().replace(' ', '_') == optimize_metric:
+                    title += ' ★ OPTIMIZED'
+                    ax.set_title(title, color='red', fontweight='bold')
+                else:
+                    ax.set_title(title)
+                ax.grid(True, alpha=0.3)
+                ax.set_ylim([0, 1.05])
+                ax.legend(loc='best')
+            else:
+                ax.text(0.5, 0.5, f'{name}\nNot Available', ha='center', va='center', fontsize=12)
+                ax.set_xlabel(r'$-\log_{10}(\lambda)$')
+        
+        fig4b.suptitle(f'LOO Grid Search Extended Metrics: {n_folds} Folds\nOptimization Metric: {optimize_metric}', 
+                      fontsize=14, fontweight='bold', y=1.02)
+        plt.tight_layout()
+        fig4b.savefig(os.path.join(gridsearch_dir, 'extended_metrics_loo_aggregate.png'), dpi=150, bbox_inches='tight')
+        plt.close(fig4b)
+    
+    # Plot 5: Distribution of best lambdas across folds
+    fig5, ax5 = plt.subplots(figsize=(10, 6))
+    ax5.hist(-np.log10(all_best_lambdas), bins=min(30, n_folds // 2 + 1), edgecolor='white', alpha=0.7, color='steelblue')
+    ax5.axvline(x=-np.log10(np.median(all_best_lambdas)), color='r', linestyle='--', linewidth=2,
+                label=f'Median λ = {np.median(all_best_lambdas):.2e}')
+    ax5.axvline(x=-np.log10(np.mean(all_best_lambdas)), color='orange', linestyle='--', linewidth=2,
+                label=f'Mean λ = {np.mean(all_best_lambdas):.2e}')
+    ax5.set_xlabel(r'$-\log_{10}(\lambda_{best})$', fontsize=12)
+    ax5.set_ylabel('Count (folds)', fontsize=12)
+    ax5.set_title(f'Distribution of Selected λ Values Across {n_folds} LOO Folds', fontsize=14, fontweight='bold')
+    ax5.legend(loc='best')
+    ax5.grid(True, alpha=0.3)
+    plt.tight_layout()
+    fig5.savefig(os.path.join(gridsearch_dir, 'best_lambda_distribution.png'), dpi=150, bbox_inches='tight')
+    plt.close(fig5)
+    
+    # Save aggregate data to CSV
+    aggregate_data = pd.DataFrame({
+        'lambda': lmdas,
+        'neg_log_lambda': neg_log_lambda,
+        'mean_accuracy': mean_accuracy,
+        'std_accuracy': std_accuracy,
+        'mean_cv_loss': mean_loss,
+        'std_cv_loss': std_loss
+    })
+    if mean_auc is not None:
+        aggregate_data['mean_auc_roc'] = mean_auc
+        aggregate_data['std_auc_roc'] = std_auc
+    if mean_sensitivity is not None:
+        aggregate_data['mean_sensitivity'] = mean_sensitivity
+        aggregate_data['std_sensitivity'] = std_sensitivity
+    if mean_specificity is not None:
+        aggregate_data['mean_specificity'] = mean_specificity
+        aggregate_data['std_specificity'] = std_specificity
+    if mean_balanced_accuracy is not None:
+        aggregate_data['mean_balanced_accuracy'] = mean_balanced_accuracy
+        aggregate_data['std_balanced_accuracy'] = std_balanced_accuracy
+    if mean_f1 is not None:
+        aggregate_data['mean_f1'] = mean_f1
+        aggregate_data['std_f1'] = std_f1
+    aggregate_data['optimize_metric'] = optimize_metric
+    aggregate_data['is_best_accuracy'] = np.arange(n_lambdas) == best_idx_aggregate
+    aggregate_data['is_best_loss'] = np.arange(n_lambdas) == best_loss_idx
+    aggregate_data.to_csv(os.path.join(gridsearch_dir, 'gridsearch_results_loo_aggregate.csv'), index=False)
+    
+    # Save best lambda per fold
+    best_lambda_data = pd.DataFrame({
+        'fold': [r['fold'] for r in loo_gridsearch_results],
+        'best_lambda': all_best_lambdas,
+        'neg_log_best_lambda': -np.log10(all_best_lambdas),
+        'best_accuracy': [1.0 - r['test_error'][r['best_idx']] for r in loo_gridsearch_results]
+    })
+    best_lambda_data.to_csv(os.path.join(gridsearch_dir, 'best_lambda_per_fold.csv'), index=False)
+    
+    logger.info(f"  Saved aggregate gridsearch plots and data")
+    
+    # ==================== INDIVIDUAL FOLD PLOTS ====================
+    
+    # Determine which folds to save
+    if max_individual_plots is None:
+        # Save ALL folds
+        folds_to_save = range(n_folds)
+        logger.info(f"  Saving individual plots for ALL {n_folds} LOO folds")
+    elif n_folds <= max_individual_plots:
+        folds_to_save = range(n_folds)
+        logger.info(f"  Saving individual plots for all {n_folds} folds")
+    else:
+        # Save evenly spaced folds (limited)
+        step = n_folds // max_individual_plots
+        folds_to_save = list(range(0, n_folds, step))[:max_individual_plots]
+        logger.info(f"  Saving individual plots for {len(folds_to_save)} of {n_folds} folds (every {step}th fold)")
+    
+    for fold_idx in folds_to_save:
+        result = loo_gridsearch_results[fold_idx]
+        fold_lmdas = result['lmdas']
+        fold_accuracy = 1.0 - result['test_error']
+        fold_loss = result['avg_losses']
+        fold_best_idx = result['best_idx']
+        fold_auc = result['roc_auc']
+        
+        neg_log_lmda = -np.log10(fold_lmdas)
+        
+        # Create combined plot for this fold
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        
+        # Accuracy
+        axes[0].plot(neg_log_lmda, fold_accuracy, 'b-', linewidth=2, marker='o', markersize=2)
+        axes[0].axvline(x=neg_log_lmda[fold_best_idx], color='r', linestyle='--', linewidth=1.5)
+        axes[0].scatter([neg_log_lmda[fold_best_idx]], [fold_accuracy[fold_best_idx]], color='r', s=80, zorder=5)
+        axes[0].set_xlabel(r'$-\log_{10}(\lambda)$')
+        axes[0].set_ylabel('Accuracy')
+        axes[0].set_title(f'Accuracy: {fold_accuracy[fold_best_idx]:.4f}')
+        axes[0].grid(True, alpha=0.3)
+        axes[0].set_ylim([0, 1.05])
+        
+        # AUC-ROC
+        if fold_auc is not None and not np.all(fold_auc == 0):
+            axes[1].plot(neg_log_lmda, fold_auc, 'g-', linewidth=2, marker='s', markersize=2)
+            axes[1].axvline(x=neg_log_lmda[fold_best_idx], color='r', linestyle='--', linewidth=1.5)
+            axes[1].scatter([neg_log_lmda[fold_best_idx]], [fold_auc[fold_best_idx]], color='r', s=80, zorder=5)
+            axes[1].set_ylabel('AUC-ROC')
+            axes[1].set_title(f'AUC: {fold_auc[fold_best_idx]:.4f}')
+            axes[1].set_ylim([0, 1.05])
+        else:
+            axes[1].text(0.5, 0.5, 'AUC-ROC\nNot Available', ha='center', va='center')
+        axes[1].set_xlabel(r'$-\log_{10}(\lambda)$')
+        axes[1].grid(True, alpha=0.3)
+        
+        # CV Loss
+        axes[2].plot(neg_log_lmda, fold_loss, 'm-', linewidth=2, marker='d', markersize=2)
+        axes[2].axvline(x=neg_log_lmda[fold_best_idx], color='r', linestyle='--', linewidth=1.5)
+        axes[2].scatter([neg_log_lmda[fold_best_idx]], [fold_loss[fold_best_idx]], color='r', s=80, zorder=5)
+        axes[2].set_xlabel(r'$-\log_{10}(\lambda)$')
+        axes[2].set_ylabel('CV Loss')
+        axes[2].set_title(f'Loss: {fold_loss[fold_best_idx]:.4f}')
+        axes[2].grid(True, alpha=0.3)
+        
+        fig.suptitle(f'LOO Fold {fold_idx + 1}/{n_folds}: Grid Search (Best λ = {fold_lmdas[fold_best_idx]:.2e})', 
+                     fontsize=12, fontweight='bold')
+        plt.tight_layout()
+        fig.savefig(os.path.join(loo_folds_dir, f'fold_{fold_idx + 1:03d}_gridsearch.png'), dpi=100, bbox_inches='tight')
+        plt.close(fig)
+    
+    logger.info(f"  Saved {len(folds_to_save)} individual LOO fold gridsearch plots to {loo_folds_dir}")
+    
+    # Summary statistics
+    logger.info(f"  LOO Gridsearch Summary:")
+    logger.info(f"    Mean best λ: {np.mean(all_best_lambdas):.4e} (std: {np.std(all_best_lambdas):.4e})")
+    logger.info(f"    Median best λ: {np.median(all_best_lambdas):.4e}")
+    logger.info(f"    Mean accuracy at best λ: {np.mean([1.0 - r['test_error'][r['best_idx']] for r in loo_gridsearch_results]):.4f}")
+
+
+def select_best_lambda(fit, optimize_metric: str = "accuracy") -> int:
+    """
+    Select the best lambda index based on the specified optimization metric.
+    
+    Args:
+        fit: CVGrpnetResult object with metrics arrays
+        optimize_metric: Metric to optimize. One of:
+            - "accuracy": minimize test_error (Hamming loss) = maximize accuracy
+            - "sensitivity": maximize sensitivity (true positive rate)
+            - "specificity": maximize specificity (true negative rate)
+            - "balanced_accuracy": maximize (sensitivity + specificity) / 2
+            - "f1": maximize F1 score
+            - "auc_roc": maximize ROC AUC
+    
+    Returns:
+        Index of the best lambda in the path
+    """
+    if optimize_metric == "accuracy":
+        # Minimize Hamming loss = maximize accuracy
+        return int(np.argmin(fit.test_error))
+    elif optimize_metric == "sensitivity":
+        if fit.sensitivity is None:
+            raise ValueError("Sensitivity not available (only supported for binary classification)")
+        return int(np.argmax(fit.sensitivity))
+    elif optimize_metric == "specificity":
+        if fit.specificity is None:
+            raise ValueError("Specificity not available (only supported for binary classification)")
+        return int(np.argmax(fit.specificity))
+    elif optimize_metric == "balanced_accuracy":
+        if fit.balanced_accuracy is None:
+            raise ValueError("Balanced accuracy not available (only supported for binary classification)")
+        return int(np.argmax(fit.balanced_accuracy))
+    elif optimize_metric == "f1":
+        if fit.f1 is None:
+            raise ValueError("F1 score not available (only supported for binary classification)")
+        return int(np.argmax(fit.f1))
+    elif optimize_metric == "auc_roc":
+        if fit.roc_auc is None:
+            raise ValueError("ROC AUC not available")
+        return int(np.argmax(fit.roc_auc))
+    else:
+        raise ValueError(f"Unknown optimization metric: {optimize_metric}. "
+                        f"Must be one of: accuracy, sensitivity, specificity, balanced_accuracy, f1, auc_roc")
 
 
 def run_lasso_with_loo(
@@ -1733,7 +2249,12 @@ def run_lasso_with_loo(
     participant_ids: Optional[pd.Index] = None,
     use_smote: bool = False,
     smote_random_state: int = 42,
-    lmda_path_size: int = 100
+    lmda_path_size: int = 100,
+    optimize_metric: str = "accuracy",
+    compute_ci: bool = True,
+    bootstrap_method: str = "standard",
+    bootstrap_n_rounds: int = 1000,
+    ci_level: float = 0.95
 ) -> Dict[str, Any]:
     """
     Run Lasso classification with Leave-One-Out outer CV and inner k-fold CV for hyperparameter selection.
@@ -1760,6 +2281,12 @@ def run_lasso_with_loo(
         use_smote: Whether to apply SMOTE to balance training data
         smote_random_state: Random state for SMOTE reproducibility
         lmda_path_size: Number of lambda values in the regularization path (at least 50)
+        optimize_metric: Metric to maximize during hyperparameter selection.
+            Options: accuracy, sensitivity, specificity, balanced_accuracy, f1, auc_roc
+        compute_ci: Whether to compute bootstrap confidence intervals
+        bootstrap_method: Bootstrap method ('standard' or '632')
+        bootstrap_n_rounds: Number of bootstrap iterations
+        ci_level: Confidence level (e.g., 0.95 for 95% CI)
     
     Returns:
         Dictionary with predictions and evaluation results
@@ -1793,8 +2320,12 @@ def run_lasso_with_loo(
     logger.info(f"Inner CV folds: {inner_cv_folds}")
     logger.info(f"Outer CV: Leave-One-Out ({n_samples} iterations)")
     logger.info(f"Lambda path size: {lmda_path_size} (regularization parameters)")
+    logger.info(f"Optimization metric: {optimize_metric}")
     logger.info(f"Threads: {n_threads}")
     logger.info(f"SMOTE: {'Enabled' if use_smote else 'Disabled'}")
+    logger.info(f"Bootstrap CI: {'Enabled' if compute_ci else 'Disabled'}")
+    if compute_ci:
+        logger.info(f"  Method: {bootstrap_method}, Rounds: {bootstrap_n_rounds}, Level: {ci_level*100:.0f}%")
     
     # Use index as participant IDs if not provided
     if participant_ids is None:
@@ -1806,6 +2337,9 @@ def run_lasso_with_loo(
     
     # Storage for predictions
     predictions = []
+    
+    # Storage for gridsearch results from each LOO fold
+    loo_gridsearch_results = []
     
     # LOO outer loop
     logger.info("")
@@ -1868,8 +2402,23 @@ def run_lasso_with_loo(
                 progress_bar=False
             )
             
-            # Get best lambda index (minimum CV error)
-            best_lambda_idx = np.argmin(fit.test_error)
+            # Get best lambda index using the specified optimization metric
+            best_lambda_idx = select_best_lambda(fit, optimize_metric)
+            
+            # Store gridsearch results for this LOO fold (including extended metrics)
+            loo_gridsearch_results.append({
+                'fold': i,
+                'lmdas': fit.lmdas.copy(),
+                'test_error': fit.test_error.copy(),  # Hamming loss
+                'sensitivity': fit.sensitivity.copy() if fit.sensitivity is not None else None,
+                'specificity': fit.specificity.copy() if fit.specificity is not None else None,
+                'balanced_accuracy': fit.balanced_accuracy.copy() if fit.balanced_accuracy is not None else None,
+                'f1': fit.f1.copy() if fit.f1 is not None else None,
+                'avg_losses': fit.avg_losses.copy(),
+                'roc_auc': fit.roc_auc.copy() if fit.roc_auc is not None else None,
+                'best_idx': best_lambda_idx,
+                'best_lambda': fit.lmdas[best_lambda_idx]
+            })
             
             # Train final model with best lambda on all (resampled) training data
             model = grpnet(
@@ -1983,11 +2532,15 @@ def run_lasso_with_loo(
             progress_bar=False
         )
         
-        best_lambda_final = np.argmin(fit_final.test_error)
+        best_lambda_final = select_best_lambda(fit_final, optimize_metric)
         
         # Save gridsearch plots for the final model
         logger.info("Saving gridsearch parameter search plots...")
-        save_gridsearch_plots(fit_final, save_dir, logger, fold_label="final_model")
+        save_gridsearch_plots(fit_final, save_dir, logger, fold_label="final_model", optimize_metric=optimize_metric)
+        
+        # Save gridsearch plots for each LOO fold and aggregate summary
+        logger.info("Saving LOO fold gridsearch plots...")
+        save_loo_gridsearch_plots(loo_gridsearch_results, save_dir, logger, optimize_metric=optimize_metric)
         
         model_final = grpnet(
             X=X_final_resampled,
@@ -2066,9 +2619,61 @@ def run_lasso_with_loo(
     # Extract arrays for evaluation
     y_true = predictions_df['actual_label'].values
     y_prob = predictions_df['predicted_probability'].values
+    y_pred = (y_prob > 0.5).astype(int)
     
     # Generate comprehensive evaluation plots and compute all metrics
     metrics = generate_evaluation_plots(y_true, y_prob, save_dir, logger)
+    
+    # Compute bootstrap confidence intervals
+    ci_results = None
+    if compute_ci:
+        logger.info("")
+        logger.info("Computing bootstrap confidence intervals...")
+        try:
+            from llm_lasso.utils.bootstrap_ci import compute_bootstrap_ci, plot_confidence_intervals
+            
+            # Create confidence_intervals subfolder
+            ci_dir = os.path.join(save_dir, "confidence_intervals")
+            os.makedirs(ci_dir, exist_ok=True)
+            
+            ci_results = compute_bootstrap_ci(
+                y_true=y_true,
+                y_pred=y_pred,
+                y_prob=y_prob,
+                method=bootstrap_method,
+                n_rounds=bootstrap_n_rounds,
+                ci_level=ci_level,
+                random_seed=42,
+                logger=logger
+            )
+            
+            # Save confidence intervals to JSON in subfolder
+            ci_file = os.path.join(ci_dir, "confidence_intervals.json")
+            with open(ci_file, 'w') as f:
+                json.dump({
+                    "method": bootstrap_method,
+                    "n_rounds": bootstrap_n_rounds,
+                    "ci_level": ci_level,
+                    "metrics": ci_results
+                }, f, indent=2)
+            logger.info(f"Confidence intervals saved to: {ci_file}")
+            
+            # Generate and save CI visualization plots
+            logger.info("Generating confidence interval plots...")
+            plot_confidence_intervals(
+                ci_results=ci_results,
+                save_dir=ci_dir,
+                ci_level=ci_level,
+                logger=logger
+            )
+            
+        except ImportError as e:
+            logger.warning(f"Could not import bootstrap module: {e}")
+            logger.warning("Install mlxtend: pip install mlxtend>=0.23.0")
+        except Exception as e:
+            logger.warning(f"Error computing confidence intervals: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
     
     # Create summary with all metrics
     class_counts = y.value_counts().sort_index()
@@ -2081,8 +2686,22 @@ def run_lasso_with_loo(
         "class_imbalance_ratio": float(class_counts.max() / class_counts.min()),
         "smote_enabled": use_smote,
         "loo_time_seconds": float(loo_time),
+        "bootstrap_ci": {
+            "computed": ci_results is not None,
+            "method": bootstrap_method if ci_results else None,
+            "n_rounds": bootstrap_n_rounds if ci_results else None,
+            "ci_level": ci_level if ci_results else None
+        },
         **metrics  # Include all computed metrics
     }
+    
+    # Add CI bounds to summary for key metrics
+    if ci_results:
+        for metric_name in ['accuracy', 'balanced_accuracy', 'sensitivity', 'specificity', 'f1', 'auroc']:
+            if metric_name in ci_results:
+                ci_data = ci_results[metric_name]
+                summary[f"{metric_name}_ci_lower"] = ci_data.get('ci_lower')
+                summary[f"{metric_name}_ci_upper"] = ci_data.get('ci_upper')
     
     summary_file = os.path.join(save_dir, "summary.json")
     with open(summary_file, 'w') as f:
@@ -2094,13 +2713,22 @@ def run_lasso_with_loo(
     logger.info("=" * 60)
     logger.info("LOO CROSS-VALIDATION FINAL RESULTS")
     logger.info("=" * 60)
-    logger.info(f"AUROC: {metrics['auroc']:.4f}")
-    logger.info(f"Accuracy: {metrics['accuracy']:.4f} ({int(metrics['accuracy'] * n_samples)}/{n_samples} correct)")
-    logger.info(f"Balanced Accuracy: {metrics['balanced_accuracy']:.4f}")
-    logger.info(f"Sensitivity: {metrics['sensitivity']:.4f}")
-    logger.info(f"Specificity: {metrics['specificity']:.4f}")
-    logger.info(f"F1 Score: {metrics['f1_score']:.4f}")
-    logger.info(f"MCC: {metrics['mcc']:.4f}")
+    
+    # Helper function to format metric with optional CI
+    def format_metric_log(name: str, value: float, ci_key: str = None) -> str:
+        if ci_results and ci_key and ci_key in ci_results:
+            ci = ci_results[ci_key]
+            if ci.get('ci_lower') is not None and ci.get('ci_upper') is not None:
+                return f"{name}: {value:.4f} ({int(ci_level*100)}% CI: {ci['ci_lower']:.4f} - {ci['ci_upper']:.4f})"
+        return f"{name}: {value:.4f}"
+    
+    logger.info(format_metric_log("AUROC", metrics['auroc'], 'auroc'))
+    logger.info(format_metric_log("Accuracy", metrics['accuracy'], 'accuracy') + f" ({int(metrics['accuracy'] * n_samples)}/{n_samples} correct)")
+    logger.info(format_metric_log("Balanced Accuracy", metrics['balanced_accuracy'], 'balanced_accuracy'))
+    logger.info(format_metric_log("Sensitivity", metrics['sensitivity'], 'sensitivity'))
+    logger.info(format_metric_log("Specificity", metrics['specificity'], 'specificity'))
+    logger.info(format_metric_log("F1 Score", metrics['f1_score'], 'f1'))
+    logger.info(format_metric_log("MCC", metrics['mcc'], 'mcc'))
     
     return {
         "predictions": predictions_df,
@@ -2347,6 +2975,25 @@ class PipelineArguments:
     lmda_path_size: int = field(default=100, metadata={
         "help": "Number of lambda (regularization) parameters to search over. Must be at least 50 for adequate grid search."
     })
+    optimize_metric: str = field(default="accuracy", metadata={
+        "help": "Metric to maximize during hyperparameter selection. Default 'accuracy' minimizes Hamming loss.",
+        "choices": ["accuracy", "sensitivity", "specificity", "balanced_accuracy", "f1", "auc_roc"]
+    })
+    
+    # Bootstrap confidence intervals
+    compute_ci: bool = field(default=True, metadata={
+        "help": "Compute bootstrap confidence intervals for performance metrics"
+    })
+    bootstrap_method: str = field(default="standard", metadata={
+        "help": "Bootstrap method: 'standard' (simple resampling) or '632' (.632 bootstrap for reduced bias)",
+        "choices": ["standard", "632"]
+    })
+    bootstrap_n_rounds: int = field(default=1000, metadata={
+        "help": "Number of bootstrap iterations for confidence intervals"
+    })
+    ci_level: float = field(default=0.95, metadata={
+        "help": "Confidence level for intervals (e.g., 0.95 for 95% CI)"
+    })
     
     # Class imbalance handling
     use_smote: bool = field(default=False, metadata={
@@ -2517,7 +3164,12 @@ def main():
                 participant_ids=X_imputed.index,
                 use_smote=args.use_smote,
                 smote_random_state=args.smote_random_state,
-                lmda_path_size=args.lmda_path_size
+                lmda_path_size=args.lmda_path_size,
+                optimize_metric=args.optimize_metric,
+                compute_ci=args.compute_ci,
+                bootstrap_method=args.bootstrap_method,
+                bootstrap_n_rounds=args.bootstrap_n_rounds,
+                ci_level=args.ci_level
             )
         else:
             # Use standard train/test split

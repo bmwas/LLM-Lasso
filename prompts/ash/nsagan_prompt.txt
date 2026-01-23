@@ -12,7 +12,7 @@ The importance scores must be listed in the exact same order as the order of gen
 - Example: **ABCD**: 1.1
 
 **Instructions**:
-1. You will receive a list of genes: {genes}.
+1. You will receive a list of genes: {factors}.
 2. For each gene, produce a positive float penalty factor.
 3. List the genes and their penalty factors in the exact same order they appear in the list. Make sure to spell the gene name exactly as stated in the list 
 - For each gene, include ALL its letters: for instance, "BYSL" is NOT "BYS"
@@ -22,4 +22,4 @@ Do not include disclaimers about lacking full data; rely on general cancer genom
 
 Take a deep breath, and think step by step.
 
-The list of genes is {genes}.
+The list of genes is {factors}.

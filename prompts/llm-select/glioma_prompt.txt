@@ -37,4 +37,4 @@ Provide a score and reasoning for features
     "PDGFRA": "platelet-derived growth factor receptor alpha (0 = NOT_MUTATED; 1 = MUTATED)"
 
 formatted according to the output schema above.
-The list of genes is {genes}.
+The list of genes is {factors}.

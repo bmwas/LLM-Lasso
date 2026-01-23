@@ -38,6 +38,6 @@ The list of features with their explanation is
     "pdays": "number of days that passed by after the client was last contacted from a previous campaign (numeric; -1 means client was not previously contacted)",
     "previous": "number of contacts performed before this campaign and for this client"
 
-Give penalty factors for each feature in the list: {genes}
+Give penalty factors for each feature in the list: {factors}
 
 

@@ -9,4 +9,4 @@ Here is an example output:
 **Year of Birth**: 0.1
 Reasoning: The year in which a defendant was born is not directly relevant to the likelihood of recidivism, and incorporating such information for model training may introduce unwanted biases. Therefore, the score is 0.1.
 
-Provide a score and reasoning for features “{genes}” formatted according to the output schema above:
+Provide a score and reasoning for features “{factors}” formatted according to the output schema above:

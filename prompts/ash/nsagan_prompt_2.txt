@@ -8,7 +8,7 @@ Base these penalty factors on general gene relevance, known associations, and pa
 The penalty factors must be listed in the exact same order as the order of genes provided above. 
 
 **Instructions**:
-1. You will receive a list of genes, which is a subset of the 1592 total genes: {genes}.
+1. You will receive a list of genes, which is a subset of the 1592 total genes: {factors}.
 2. For each gene, produce an integer penalty factor from 2 to 5.
 3. List the genes and their penalty factors in the exact same order they appear in the list.
 4. For each penalty factor, provide a brief statement of how you arrived at that factor or why the gene is more or less relevant to "{category}."
@@ -17,4 +17,4 @@ Do not include disclaimers about lacking full data; rely on general cancer genom
 
 Take a deep breath, and think step by step.
 
-The list of genes is {genes}.
+The list of genes is {factors}.

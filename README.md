@@ -15,9 +15,11 @@ Unlike traditional feature selection methods that rely solely on numerical data,
 ✨ **Open-Source LLM Support**: Run LLM-Lasso locally with Qwen3 models via vLLM - no cloud API required  
 🔍 **Comprehensive Grid Search**: Automatic hyperparameter search with visualization (100+ λ values tested)  
 📊 **Grid Search Visualization**: Publication-ready plots showing regularization path analysis  
+🎯 **Flexible Metric Optimization**: Choose which metric to optimize (accuracy, sensitivity, specificity, balanced accuracy, F1, AUC-ROC)  
+📈 **Bootstrap Confidence Intervals**: Automatic computation of CIs for all performance metrics  
 🔐 **Privacy & Cost Control**: Process sensitive data locally without API costs  
 
-See [Open-Source LLM Integration](#open-source-llm-integration-with-qwen-models) and [Hyperparameter Search](#hyperparameter-search-and-grid-search-visualization) for details.
+See [Open-Source LLM Integration](#open-source-llm-integration-with-qwen-models), [Hyperparameter Search](#hyperparameter-search-and-grid-search-visualization), [Optimization Metric Selection](#optimization-metric-selection), and [Bootstrap Confidence Intervals](#bootstrap-confidence-intervals) for details.
 
 ---
 
@@ -45,6 +47,8 @@ See [Open-Source LLM Integration](#open-source-llm-integration-with-qwen-models)
   - [Running the Pipeline](#running-the-pipeline)
   - [Understanding Output Files](#understanding-output-files)
   - [Hyperparameter Search and Grid Search Visualization](#hyperparameter-search-and-grid-search-visualization)
+  - [Optimization Metric Selection](#optimization-metric-selection)
+  - [Bootstrap Confidence Intervals](#bootstrap-confidence-intervals)
 - [PDF RAG Pipeline](#pdf-rag-pipeline)
 - [Tutorials](#tutorials)
 - [Repo Structure](#repo-structure)
@@ -859,6 +863,14 @@ python scripts/run_pbd_llm_lasso.py \
 | `--n-trials` | Number of scoring trials | `1` |
 | `--test_size` | Train/test split ratio | `0.2` |
 | `--imputation_strategy` | Handle missing values (`median`, `mean`, `most_frequent`) | `median` |
+| `--use_loo` | Use Leave-One-Out cross-validation for outer testing loop | `False` |
+| `--inner_cv_folds` | Number of inner CV folds for hyperparameter selection | `10` |
+| `--lmda_path_size` | Number of lambda values in regularization path (min 50) | `100` |
+| `--optimize_metric` | Metric to maximize during hyperparameter selection: `accuracy`, `sensitivity`, `specificity`, `balanced_accuracy`, `f1`, `auc_roc`. See [Optimization Metric Selection](#optimization-metric-selection). | `accuracy` |
+| `--compute_ci` | Compute bootstrap confidence intervals for metrics. See [Bootstrap Confidence Intervals](#bootstrap-confidence-intervals). | `True` |
+| `--bootstrap_method` | Bootstrap method: `standard` or `632` (.632 bootstrap) | `standard` |
+| `--bootstrap_n_rounds` | Number of bootstrap iterations | `1000` |
+| `--ci_level` | Confidence level (e.g., 0.95 for 95% CI) | `0.95` |
 | `--log_level` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) | `INFO` |
 | `--wipe` | Clear previous results before running | `False` |
 
@@ -875,7 +887,20 @@ All outputs are saved to the same directory as your input dataset (or `--save_di
 | `trial_scores_RAG.json` | Per-trial scoring data |
 | `final_scores_RAG.pkl` | Serialized final scores |
 | `lasso_results.csv` | Lasso model coefficients (if adelie installed) |
+| `confidence_intervals/` | **Bootstrap CI results and plots** (if `--compute_ci`) - see below |
 | `gridsearch/` | **Grid search plots and data** (see below) |
+
+#### Confidence Intervals Output (`confidence_intervals/` subfolder)
+
+When `--compute_ci` is enabled (default), this subfolder contains:
+
+| File | Description |
+|------|-------------|
+| `confidence_intervals.json` | Full CI data for all metrics (point estimate, lower/upper bounds) |
+| `metrics_with_ci_bars.png` | Horizontal bar chart showing all metrics with error bars |
+| `forest_plot_ci.png` | Forest plot style visualization (common in medical literature) |
+| `ci_width_comparison.png` | Bar chart comparing CI widths (narrower = more precise) |
+| `ci_summary_dashboard.png` | 4-panel summary with key metrics, sensitivity vs specificity, and more |
 
 #### Grid Search Output (`gridsearch/` subfolder)
 
@@ -887,13 +912,41 @@ Grid search systematically tests multiple regularization parameter values to fin
 
 **Generated Files:**
 
+The gridsearch folder contains three types of outputs:
+
+**1. Final Model Grid Search** (trained on all data after LOO):
+
 | File | Description |
 |------|-------------|
-| `lambda_vs_accuracy_final_model.png` | Plot showing how λ affects classification accuracy. Higher accuracy is better. |
-| `lambda_vs_auc_final_model.png` | Plot showing how λ affects AUC-ROC. Higher AUC indicates better discrimination. |
-| `lambda_vs_loss_final_model.png` | Plot showing CV loss vs λ with error bars (std across folds). Lower loss is better. |
-| `gridsearch_summary_final_model.png` | Combined 3-panel summary showing all metrics side-by-side |
-| `gridsearch_results_final_model.csv` | Raw data table with columns: `lambda`, `neg_log_lambda`, `accuracy`, `auc_roc`, `cv_loss`, `is_best` |
+| `lambda_vs_accuracy_final_model.png` | λ vs accuracy for the final model |
+| `lambda_vs_auc_final_model.png` | λ vs AUC-ROC for the final model |
+| `lambda_vs_loss_final_model.png` | λ vs CV loss for the final model |
+| `gridsearch_summary_final_model.png` | Combined 3-panel summary |
+| `extended_metrics_final_model.png` | Extended metrics (sensitivity, specificity, balanced accuracy, F1) |
+| `gridsearch_results_final_model.csv` | Raw data (λ, accuracy, AUC, loss, extended metrics) |
+
+**2. LOO Aggregate Grid Search** (aggregated across all LOO folds):
+
+| File | Description |
+|------|-------------|
+| `lambda_vs_accuracy_loo_aggregate.png` | Mean accuracy ± std across all LOO folds (with individual fold traces in gray) |
+| `lambda_vs_auc_loo_aggregate.png` | Mean AUC-ROC ± std across all LOO folds |
+| `lambda_vs_loss_loo_aggregate.png` | Mean CV loss ± std across all LOO folds |
+| `gridsearch_summary_loo_aggregate.png` | Combined 3-panel LOO aggregate summary |
+| `extended_metrics_loo_aggregate.png` | Extended metrics (sensitivity, specificity, balanced accuracy, F1) aggregated across folds |
+| `gridsearch_results_loo_aggregate.csv` | Aggregate statistics (mean, std for each metric including extended metrics) |
+| `best_lambda_distribution.png` | Histogram showing distribution of selected λ values across folds |
+| `best_lambda_per_fold.csv` | Best λ and accuracy for each LOO fold |
+
+**3. Individual LOO Fold Grid Search** (in `loo_folds/` subfolder):
+
+| File | Description |
+|------|-------------|
+| `loo_folds/fold_001_gridsearch.png` | Grid search plot for LOO fold 1 |
+| `loo_folds/fold_002_gridsearch.png` | Grid search plot for LOO fold 2 |
+| `loo_folds/fold_XXX_gridsearch.png` | **ALL** LOO fold grid search plots (one per fold) |
+
+**Note:** All LOO fold gridsearch plots are saved. If you have N samples, you'll get N individual fold plots showing how lambda selection varied across each LOO iteration.
 
 **Understanding the Plots:**
 
@@ -966,17 +1019,151 @@ python scripts/run_pbd_llm_lasso.py \
     # ... other arguments
 ```
 
+#### Optimization Metric Selection
+
+By default, LLM-Lasso selects the optimal λ by minimizing the Hamming loss (which is equivalent to maximizing accuracy). However, for imbalanced datasets or specific use cases, you may want to optimize for a different metric.
+
+**Available Metrics:**
+
+| Metric | Description | When to Use |
+|--------|-------------|-------------|
+| `accuracy` | 1 - Hamming loss (default) | Balanced datasets |
+| `sensitivity` | True Positive Rate (Recall) | Medical screening - minimize missed positives |
+| `specificity` | True Negative Rate | Minimize false positives |
+| `balanced_accuracy` | (Sensitivity + Specificity) / 2 | Imbalanced datasets |
+| `f1` | Harmonic mean of precision and recall | Balance precision and recall |
+| `auc_roc` | Area under ROC curve | Overall discrimination ability |
+
+**Usage Examples:**
+
+```bash
+# Default: maximize accuracy
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --optimize_metric accuracy \
+    # ... other arguments
+
+# Maximize sensitivity (important for medical screening - don't miss positives)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --optimize_metric sensitivity \
+    # ... other arguments
+
+# Maximize specificity (reduce false positives)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --optimize_metric specificity \
+    # ... other arguments
+
+# Use balanced accuracy (recommended for imbalanced datasets)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --optimize_metric balanced_accuracy \
+    # ... other arguments
+```
+
+**Grid Search Visualization:**
+
+When using an optimization metric other than accuracy, the grid search plots will:
+1. Highlight the optimized metric with a "★ OPTIMIZED" label
+2. Show all extended metrics (sensitivity, specificity, balanced accuracy, F1) in an additional plot
+3. Include the optimization metric in the saved CSV data
+
+The extended metrics plots are saved as:
+- `extended_metrics_final_model.png` - For the final model
+- `extended_metrics_loo_aggregate.png` - Aggregated across LOO folds
+
+#### Bootstrap Confidence Intervals
+
+LLM-Lasso can compute bootstrap confidence intervals for all performance metrics, providing a measure of statistical uncertainty in your results.
+
+**What are Bootstrap Confidence Intervals?**
+
+Bootstrap confidence intervals estimate how much your reported metrics might vary if you collected multiple independent test sets. This is particularly important for:
+- Small datasets where single-point estimates can be unreliable
+- Imbalanced datasets where minority class performance drives uncertainty
+- Comparing models - overlapping CIs suggest no significant difference
+
+**Available Methods:**
+
+| Method | Description | When to Use |
+|--------|-------------|-------------|
+| `standard` | Simple resampling with replacement (default) | General purpose, widely accepted |
+| `632` | .632 bootstrap with bias correction | When concerned about optimistic bias |
+
+**Usage:**
+
+```bash
+# Default: 95% CI with standard bootstrap (1000 rounds)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --compute_ci \
+    # ... other arguments
+
+# Customize bootstrap settings
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --compute_ci \
+    --bootstrap_method 632 \
+    --bootstrap_n_rounds 2000 \
+    --ci_level 0.99 \
+    # ... other arguments
+
+# Disable confidence intervals (faster)
+python scripts/run_pbd_llm_lasso.py \
+    --use_loo \
+    --no-compute_ci \
+    # ... other arguments
+```
+
+**Output:**
+
+When `--compute_ci` is enabled (default), the pipeline outputs:
+- **Console logs** with CIs: `Accuracy: 0.8523 (95% CI: 0.7821 - 0.9104)`
+- **`confidence_intervals/` subfolder** containing:
+  - `confidence_intervals.json` - Full CI data for all metrics
+  - `metrics_with_ci_bars.png` - Horizontal bar chart with error bars
+  - `forest_plot_ci.png` - Forest plot style visualization
+  - `ci_width_comparison.png` - Comparison of CI widths (precision)
+  - `ci_summary_dashboard.png` - 4-panel summary dashboard
+- **`summary.json`**: Includes CI bounds for key metrics
+
+**Metrics with Confidence Intervals:**
+
+- Accuracy, Balanced Accuracy
+- Sensitivity (Recall), Specificity
+- Precision, F1 Score
+- AUROC, Average Precision
+- Matthews Correlation Coefficient (MCC)
+
+**Arguments:**
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--compute_ci` | Enable bootstrap CI computation | `True` |
+| `--bootstrap_method` | `standard` or `632` | `standard` |
+| `--bootstrap_n_rounds` | Number of bootstrap iterations | `1000` |
+| `--ci_level` | Confidence level (0.90, 0.95, 0.99) | `0.95` |
+
 #### Output Location
 
 All grid search plots and data are saved in:
 ```
 {save_dir}/gridsearch/
+├── *_final_model.*          # Final model grid search
+├── *_loo_aggregate.*        # Aggregated LOO results (mean ± std)
+├── best_lambda_*.png/csv    # Lambda distribution across folds
+└── loo_folds/               # Individual LOO fold plots
+    ├── fold_001_gridsearch.png
+    ├── fold_002_gridsearch.png
+    └── ...
 ```
 
 This includes:
-- Individual metric plots (accuracy, AUC, loss)
-- Combined summary plot
-- Raw CSV data for custom analysis
+- **Final model plots**: Grid search for model trained on all data
+- **LOO aggregate plots**: Mean ± std across all LOO folds (with individual traces)
+- **Lambda distribution**: How the selected λ varies across folds
+- **Individual fold plots**: **ALL** LOO fold grid searches (one plot per LOO iteration)
 
 See [Grid Search Output](#grid-search-output-gridsearch-subfolder) section above for detailed file descriptions.
 
@@ -1003,6 +1190,7 @@ python scripts/run_pbd_llm_lasso.py \
     --pdf_rag_num_docs 3 \
     --use_loo \
     --lmda_path_size 100 \
+    --optimize_metric accuracy \
     --temp 0 \
     --n-trials 1 \
     --test_size 0.3 \
@@ -1029,6 +1217,7 @@ python scripts/run_pbd_llm_lasso.py \
     --pdf_rag_num_docs 3 \
     --use_loo \
     --lmda_path_size 100 \
+    --optimize_metric balanced_accuracy \
     --temp 0 \
     --n-trials 1 \
     --test_size 0.3 \
@@ -1041,12 +1230,11 @@ python scripts/run_pbd_llm_lasso.py \
 
 Both examples will create:
 - `penalty_scores.json` - LLM-generated feature penalties
-- `gridsearch/` folder - Hyperparameter search plots and data
-  - `lambda_vs_accuracy_final_model.png`
-  - `lambda_vs_auc_final_model.png`
-  - `lambda_vs_loss_final_model.png`
-  - `gridsearch_summary_final_model.png`
-  - `gridsearch_results_final_model.csv`
+- `gridsearch/` folder - Comprehensive hyperparameter search results:
+  - **Final model plots**: `*_final_model.png` and `.csv`
+  - **LOO aggregate plots**: `*_loo_aggregate.png` (mean ± std across all folds)
+  - **Best λ distribution**: `best_lambda_distribution.png` and `best_lambda_per_fold.csv`
+  - **Individual fold plots**: `loo_folds/fold_XXX_gridsearch.png` (up to 20 folds)
 - `loo_predictions.csv` - Cross-validation predictions
 - `model_coefficients.json` - Final model coefficients
 - Evaluation plots (ROC, PR curves, etc.)

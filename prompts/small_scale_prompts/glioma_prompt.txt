@@ -4,7 +4,7 @@
 5 indicates a feature with minimal relevance to the target variable (i.e., it should be penalized the most by Lasso).
 Base these penalty factors on general feature relevance related to the target variable. Do not state that it is impossible to determine exact factors without further data; instead, provide your best estimate from domain knowledge about each feature’s importance in predicting this target.
 **Instructions**:
-1. You will receive a list of features: {genes}.
+1. You will receive a list of features: {factors}.
 2. For each feature, produce an integer penalty factor from 2 to 5.
 3. List the features and their penalty factors in the exact same order they appear in the list.
 4. For each penalty factor, provide a brief statement of how you arrived at that score or why the feature is more or less relevant to the target variable.
@@ -46,4 +46,4 @@ The list of features with their explanation is:
     "FAT4": "FAT atypical cadherin 4 (0 = NOT_MUTATED; 1 = MUTATED)",
     "PDGFRA": "platelet-derived growth factor receptor alpha (0 = NOT_MUTATED; 1 = MUTATED)"
 
-The list of features is {genes}.
+The list of features is {factors}.

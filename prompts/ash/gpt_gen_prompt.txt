@@ -7,7 +7,7 @@ The penalty factors must be listed in the exact same order as the order of genes
 - **GENE_NAME**: VALUE (float)
 - Example: **AASS**: 2
 **Instructions**:
-1. You will receive a list of genes: {genes}.
+1. You will receive a list of genes: {factors}.
 2. For each gene, produce an integer penalty factor from 2 to 5.
 3. List the genes and their penalty factors in the exact same order they appear in the list.
 - Note that letter "I" is not number "1", so do not write "ARSI" as "ARS1".
@@ -16,4 +16,4 @@ The penalty factors must be listed in the exact same order as the order of genes
 
 Do not include disclaimers about lacking full data; rely on general cancer genomics and pathway relevance.
 
-The list of genes is {genes}.
+The list of genes is {factors}.

@@ -9,4 +9,4 @@ Here is an example output:
 **Track Score**: 0.9
 Reasoning: Track Score is a composite metric that incorporates multiple factors influencing a song's performance. A high Track Score is strongly correlated with higher Spotify streams, making this feature highly relevant.
 
-Provide a score and reasoning for features “{genes}” formatted according to the output schema above:
+Provide a score and reasoning for features “{factors}” formatted according to the output schema above:

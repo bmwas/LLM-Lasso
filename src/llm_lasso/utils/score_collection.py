@@ -15,22 +15,25 @@ from langchain_core.language_models.base import BaseLanguageModel
 def create_general_prompt(prompt_dir, category, genes, singular=False, display=False):
     """
     Generates a dynamic prompt by replacing placeholders in a pre-defined template 
-    with provided arguments. The placeholders `{category}` and `{genes}` are expected 
-    in the template file.
+    with provided arguments. The placeholder `{category}` and either `{factors}` or 
+    `{genes}` are expected in the template file.
+    
+    Note: `{factors}` is the preferred placeholder for feature/predictor names. 
+    `{genes}` is supported for backward compatibility with gene expression datasets.
 
     Args:
         prompt_dir : str
             Path to the file containing the pre-defined prompt template. This file should 
-            have placeholders `{category}` and `{genes}` to be replaced dynamically.
+            have placeholders `{category}` and `{factors}` (or `{genes}`) to be replaced.
 
         category : str
-            The cancer category or subtype for which the penalty factors are being requested 
-            (e.g., "tFL (Transformed Follicular Lymphoma)").
+            The category or context for which the penalty factors are being requested 
+            (e.g., "Suicidal Ideation", "tFL (Transformed Follicular Lymphoma)").
 
         genes : list[str] or str
-            A list of gene names (e.g., `["AASS", "ABCA6", "ABCB1"]`) or a single gene name 
-            (if `singular=True`). If `singular=False`, this should be a list of strings, 
-            which will be formatted as a comma-separated string in the prompt.
+            A list of feature/predictor names (e.g., `["age", "depression_score"]`) or 
+            a single name (if `singular=True`). If `singular=False`, this should be a 
+            list of strings, which will be formatted as a comma-separated string.
 
         singular : bool, optional
             Indicates whether `genes` is a single string instead of a list. If `True`, 
@@ -43,31 +46,39 @@ def create_general_prompt(prompt_dir, category, genes, singular=False, display=F
 
     Returns
         str
-            The final generated prompt with the placeholders `{category}` and `{genes}` 
-            replaced by the provided arguments.
+            The final generated prompt with the placeholders replaced by the provided arguments.
     """
     with open(prompt_dir, "r", encoding="utf-8") as file:
         penalty_factors_prompt_template = file.read()
 
+    # Determine which input variables are used in the template
+    # Support both {genes} and {factors} as placeholders for feature names
+    input_vars = ["category"]
+    if "{genes}" in penalty_factors_prompt_template:
+        input_vars.append("genes")
+    if "{factors}" in penalty_factors_prompt_template:
+        input_vars.append("factors")
+    
     # Create the PromptTemplate object
     penalty_factors_prompt = PromptTemplate(
-        input_variables=["category", "genes"],
+        input_variables=input_vars,
         template=penalty_factors_prompt_template
     )
 
-    # Fill in the prompt dynamically
+    # Prepare the feature string
     if not singular:
-        # Expecting a list of genes
-        filled_prompt = penalty_factors_prompt.format(
-            category=category,
-            genes=", ".join(genes)
-        )
+        feature_string = ", ".join(genes)
     else:
-        # Expecting a single string for genes
-        filled_prompt = penalty_factors_prompt.format(
-            category=category,
-            genes=genes
-        )
+        feature_string = genes
+    
+    # Fill in the prompt dynamically, supporting both {genes} and {factors}
+    format_kwargs = {"category": category}
+    if "{genes}" in penalty_factors_prompt_template:
+        format_kwargs["genes"] = feature_string
+    if "{factors}" in penalty_factors_prompt_template:
+        format_kwargs["factors"] = feature_string
+    
+    filled_prompt = penalty_factors_prompt.format(**format_kwargs)
 
     # Print the filled prompt if requested
     if display:

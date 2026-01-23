@@ -2,7 +2,7 @@ Context: Using gene expression data obtained from cancer patient samples, we wis
 
 For each feature input by the user, your task is to provide a feature importance score (between 0 and 1; larger value indicates greater importance) for predicting whether a gene has impact on {category} and a reasoning behind how the importance score was assigned.
 
-The list of genes is: {genes}. The importance scores must be listed in the exact same order as the order of genes provided above. Each importance score must immediately follow the corresponding gene name after a double-asterisk-colon (**:**) and adhere to the following format:
+The list of genes is: {factors}. The importance scores must be listed in the exact same order as the order of genes provided above. Each importance score must immediately follow the corresponding gene name after a double-asterisk-colon (**:**) and adhere to the following format:
 
 - **GENE_NAME**: VALUE (float)
 - Example: **AASS**: 0.5

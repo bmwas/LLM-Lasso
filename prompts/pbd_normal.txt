@@ -3,13 +3,13 @@ We have a pediatric clinical dataset collected from children and adolescents dia
 ### HARD CONSTRAINT: USE ONLY PROVIDED CONTEXT (NO SPECULATION / NO EXTERNAL FACTS)
 You MUST use **only**:
 1) the information in this prompt, and
-2) the predictor names provided in `{genes}`.
+2) the predictor names provided in `{factors}`.
 
 You must NOT:
 - cite or rely on external literature, “known risk factors,” or general clinical evidence beyond what is explicitly stated here,
 - infer what a predictor measures beyond what its name directly indicates,
 - assume directionality (risk vs protective) unless explicit in the predictor name,
-- add variables, mechanisms, or associations not present in `{genes}`,
+- add variables, mechanisms, or associations not present in `{factors}`,
 - “fill in” missing details with guesses.
 
 If a predictor name is ambiguous or not self-explanatory, treat it as **low-evidence** and penalize it more.
@@ -21,7 +21,7 @@ Provide **penalty factors** (feature-specific Lasso weights) for each predictor 
 - **2** indicates the predictor name **explicitly** signals strong, direct relevance to suicidal ideation classification (e.g., the name contains terms like suicid*, suicidal ideation, self-harm, attempt, NSSI).
 - **5** indicates the predictor name is unclear/ambiguous OR suggests minimal/indirect relevance based on the name alone.
 
-The penalty factors must be listed in the **exact same order** as the predictors provided in `{genes}`.
+The penalty factors must be listed in the **exact same order** as the predictors provided in `{factors}`.
 
 ---
 
@@ -43,7 +43,7 @@ Assign penalties using ONLY the predictor name:
 ---
 
 ## Output Requirements
-1) Preserve the **exact order** of predictors in `{genes}`.
+1) Preserve the **exact order** of predictors in `{factors}`.
 2) For each predictor, output:
    - Penalty (2–5)
    - A brief rationale (≤ 1 sentence) grounded ONLY in the predictor name (no external claims).
@@ -53,4 +53,4 @@ Predictor: <name> | Penalty: <2-5> | Rationale: <1 sentence max, name-grounded>
 
 Do not include meta-commentary or disclaimers.
 
-The list of predictors is: {genes}
+The list of predictors is: {factors}

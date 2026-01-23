@@ -7,4 +7,4 @@ Base these penalty factors on general gene relevance, known associations, and pa
 The importance scores must be listed in the exact same order as the order of genes provided above. Each penalty factor must immediately follow the corresponding gene name after a double-asterisk-colon (**:**) and adhere to the following format:
 Do not include disclaimers about lacking full data; rely on general cancer genomics and pathway relevance.
 
-The list of genes is {genes}.
+The list of genes is {factors}.

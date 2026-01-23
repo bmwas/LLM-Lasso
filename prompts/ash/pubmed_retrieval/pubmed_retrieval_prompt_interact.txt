@@ -1,1 +1,1 @@
-Retrieve information about gene {genes} and {category}.
+Retrieve information about gene {factors} and {category}.
