@@ -167,6 +167,42 @@ def setup_logging(log_level: str = "DEBUG", log_file: Optional[str] = None) -> l
     return logger
 
 
+def convert_to_json_serializable(obj):
+    """
+    Recursively convert numpy types to Python native types for JSON serialization.
+    
+    Args:
+        obj: Any object that may contain numpy types
+    
+    Returns:
+        Object with all numpy types converted to Python native types
+    """
+    if isinstance(obj, dict):
+        return {key: convert_to_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_to_json_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_to_json_serializable(item) for item in obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif isinstance(obj, np.str_):
+        return str(obj)
+    elif obj is None or isinstance(obj, (str, int, float, bool)):
+        return obj
+    else:
+        # Try to convert to string as fallback
+        try:
+            return str(obj)
+        except:
+            return repr(obj)
+
+
 # ==================== Data Processing ====================
 
 def load_dataset(
@@ -1635,6 +1671,518 @@ def generate_coefficient_plot(
     logger.info(f"Generated 4 coefficient plots in {save_dir}")
 
 
+def generate_comparison_plots(
+    llm_lasso_results: Dict[str, Any],
+    standard_lasso_results: Dict[str, Any],
+    save_dir: str,
+    logger: logging.Logger,
+    use_loo: bool = True
+) -> Dict[str, Any]:
+    """
+    Generate comprehensive comparison plots between LLM-Lasso and Standard Lasso.
+    
+    Creates publication-quality figures including:
+    - Metrics comparison bar chart
+    - ROC curves overlay
+    - Confusion matrices side-by-side
+    - Coefficient comparison heatmap
+    
+    Args:
+        llm_lasso_results: Results dictionary from LLM-Lasso run
+        standard_lasso_results: Results dictionary from Standard Lasso run
+        save_dir: Directory to save comparison plots
+        logger: Logger instance
+        use_loo: Whether LOO cross-validation was used
+    
+    Returns:
+        Dictionary with comparison statistics
+    """
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("GENERATING COMPARISON PLOTS")
+    logger.info("=" * 60)
+    
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Extract summaries
+    llm_summary = llm_lasso_results.get('summary', {})
+    std_summary = standard_lasso_results.get('summary', {})
+    
+    # Check if either method was skipped
+    if llm_summary.get('lasso_skipped') or std_summary.get('lasso_skipped'):
+        logger.warning("Cannot generate comparison plots - one or both methods were skipped")
+        return {"comparison_skipped": True}
+    
+    # Define color palette
+    colors = {
+        'llm_lasso': '#E74C3C',  # Red
+        'standard_lasso': '#3498DB',  # Blue
+        'neutral': '#2C3E50'
+    }
+    
+    comparison_stats = {}
+    
+    # ==================== Figure 1: Metrics Comparison Bar Chart ====================
+    logger.info("Generating metrics comparison bar chart...")
+    
+    if use_loo:
+        # LOO mode: use metrics from summary
+        metrics_config = [
+            ('Accuracy', 'accuracy'),
+            ('Sensitivity', 'sensitivity'),
+            ('Specificity', 'specificity'),
+            ('Balanced Acc.', 'balanced_accuracy'),
+            ('F1 Score', 'f1_score'),
+            ('AUROC', 'auroc'),
+            ('MCC', 'mcc'),
+            ('Brier Score', 'brier_score'),
+        ]
+        
+        llm_values = []
+        std_values = []
+        metric_names = []
+        
+        for name, key in metrics_config:
+            llm_val = llm_summary.get(key)
+            std_val = std_summary.get(key)
+            if llm_val is not None and std_val is not None:
+                llm_values.append(llm_val)
+                std_values.append(std_val)
+                metric_names.append(name)
+        
+        if metric_names:
+            fig, ax = plt.subplots(figsize=(14, 7))
+            
+            x = np.arange(len(metric_names))
+            width = 0.35
+            
+            bars1 = ax.bar(x - width/2, llm_values, width, label='LLM-Lasso', 
+                          color=colors['llm_lasso'], edgecolor='white', linewidth=1.5)
+            bars2 = ax.bar(x + width/2, std_values, width, label='Standard Lasso', 
+                          color=colors['standard_lasso'], edgecolor='white', linewidth=1.5)
+            
+            # Add value labels on bars
+            for bar, val in zip(bars1, llm_values):
+                height = bar.get_height()
+                ax.annotate(f'{val:.3f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 3), textcoords="offset points",
+                           ha='center', va='bottom', fontsize=9, fontweight='bold',
+                           color=colors['llm_lasso'])
+            
+            for bar, val in zip(bars2, std_values):
+                height = bar.get_height()
+                ax.annotate(f'{val:.3f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 3), textcoords="offset points",
+                           ha='center', va='bottom', fontsize=9, fontweight='bold',
+                           color=colors['standard_lasso'])
+            
+            ax.set_xlabel('Metric', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Value', fontsize=12, fontweight='bold')
+            ax.set_title('LLM-Lasso vs Standard Lasso: Performance Comparison', 
+                        fontsize=14, fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(metric_names, rotation=45, ha='right')
+            ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+            ax.set_ylim(0, 1.15)
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            plt.tight_layout()
+            bar_file = os.path.join(save_dir, 'metrics_comparison_bar.png')
+            fig.savefig(bar_file, dpi=300, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            logger.info(f"  Saved: {bar_file}")
+            
+            # Calculate differences
+            for name, llm_val, std_val in zip(metric_names, llm_values, std_values):
+                diff = float(llm_val - std_val)
+                is_llm_better = bool(diff > 0) if name != 'Brier Score' else bool(diff < 0)
+                comparison_stats[name.lower().replace(' ', '_').replace('.', '')] = {
+                    'llm_lasso': float(llm_val),
+                    'standard_lasso': float(std_val),
+                    'difference': diff,
+                    'llm_better': is_llm_better
+                }
+                logger.debug(f"  {name}: LLM={llm_val:.4f}, STD={std_val:.4f}, Diff={diff:+.4f}, LLM Better: {is_llm_better}")
+    
+    else:
+        # Non-LOO mode: use test_error and auroc
+        metrics_config = [
+            ('Accuracy', lambda s: 1 - s.get('test_error', 0) if s.get('test_error') is not None else s.get('accuracy')),
+            ('AUROC', lambda s: s.get('auroc')),
+        ]
+        
+        llm_values = []
+        std_values = []
+        metric_names = []
+        
+        for name, getter in metrics_config:
+            llm_val = getter(llm_summary)
+            std_val = getter(std_summary)
+            if llm_val is not None and std_val is not None:
+                llm_values.append(llm_val)
+                std_values.append(std_val)
+                metric_names.append(name)
+        
+        if metric_names:
+            fig, ax = plt.subplots(figsize=(10, 6))
+            
+            x = np.arange(len(metric_names))
+            width = 0.35
+            
+            bars1 = ax.bar(x - width/2, llm_values, width, label='LLM-Lasso', 
+                          color=colors['llm_lasso'], edgecolor='white', linewidth=1.5)
+            bars2 = ax.bar(x + width/2, std_values, width, label='Standard Lasso', 
+                          color=colors['standard_lasso'], edgecolor='white', linewidth=1.5)
+            
+            for bar, val in zip(bars1, llm_values):
+                height = bar.get_height()
+                ax.annotate(f'{val:.3f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 3), textcoords="offset points",
+                           ha='center', va='bottom', fontsize=10, fontweight='bold')
+            
+            for bar, val in zip(bars2, std_values):
+                height = bar.get_height()
+                ax.annotate(f'{val:.3f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 3), textcoords="offset points",
+                           ha='center', va='bottom', fontsize=10, fontweight='bold')
+            
+            ax.set_xlabel('Metric', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Value', fontsize=12, fontweight='bold')
+            ax.set_title('LLM-Lasso vs Standard Lasso: Performance Comparison', 
+                        fontsize=14, fontweight='bold')
+            ax.set_xticks(x)
+            ax.set_xticklabels(metric_names)
+            ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+            ax.set_ylim(0, 1.15)
+            ax.grid(True, alpha=0.3, axis='y')
+            
+            plt.tight_layout()
+            bar_file = os.path.join(save_dir, 'metrics_comparison_bar.png')
+            fig.savefig(bar_file, dpi=300, bbox_inches='tight', facecolor='white')
+            plt.close(fig)
+            logger.info(f"  Saved: {bar_file}")
+    
+    # ==================== Figure 2: ROC Curves Comparison ====================
+    if use_loo:
+        logger.info("Generating ROC curves comparison...")
+        
+        llm_preds = llm_lasso_results.get('predictions')
+        std_preds = standard_lasso_results.get('predictions')
+        
+        if llm_preds is not None and std_preds is not None:
+            try:
+                llm_y_true = llm_preds['actual_label'].values
+                llm_y_prob = llm_preds['predicted_probability'].values
+                std_y_true = std_preds['actual_label'].values
+                std_y_prob = std_preds['predicted_probability'].values
+                
+                llm_fpr, llm_tpr, _ = roc_curve(llm_y_true, llm_y_prob)
+                llm_auc = auc(llm_fpr, llm_tpr)
+                std_fpr, std_tpr, _ = roc_curve(std_y_true, std_y_prob)
+                std_auc = auc(std_fpr, std_tpr)
+                
+                fig, ax = plt.subplots(figsize=(10, 10))
+                
+                # Plot ROC curves
+                ax.plot(llm_fpr, llm_tpr, color=colors['llm_lasso'], lw=2.5, 
+                       label=f'LLM-Lasso (AUC = {llm_auc:.3f})')
+                ax.plot(std_fpr, std_tpr, color=colors['standard_lasso'], lw=2.5, 
+                       label=f'Standard Lasso (AUC = {std_auc:.3f})')
+                ax.plot([0, 1], [0, 1], color=colors['neutral'], lw=1.5, 
+                       linestyle='--', alpha=0.7, label='Random Classifier')
+                
+                # Fill between to show difference
+                ax.fill_between(llm_fpr, llm_tpr, alpha=0.1, color=colors['llm_lasso'])
+                ax.fill_between(std_fpr, std_tpr, alpha=0.1, color=colors['standard_lasso'])
+                
+                ax.set_xlim([-0.02, 1.02])
+                ax.set_ylim([-0.02, 1.02])
+                ax.set_xlabel('False Positive Rate (1 - Specificity)', fontsize=12)
+                ax.set_ylabel('True Positive Rate (Sensitivity)', fontsize=12)
+                ax.set_title('ROC Curve Comparison: LLM-Lasso vs Standard Lasso', 
+                            fontsize=14, fontweight='bold')
+                ax.legend(loc='lower right', frameon=True, fancybox=True, shadow=True)
+                ax.set_aspect('equal')
+                ax.grid(True, alpha=0.3, linestyle='-', linewidth=0.5)
+                
+                plt.tight_layout()
+                roc_file = os.path.join(save_dir, 'roc_curves_comparison.png')
+                fig.savefig(roc_file, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close(fig)
+                logger.info(f"  Saved: {roc_file}")
+                
+                comparison_stats['auc_difference'] = float(llm_auc - std_auc)
+                logger.debug(f"  AUC Difference: LLM ({llm_auc:.4f}) - STD ({std_auc:.4f}) = {llm_auc - std_auc:+.4f}")
+                
+            except Exception as e:
+                logger.warning(f"Could not generate ROC comparison: {e}")
+    
+    # ==================== Figure 3: Confusion Matrices Comparison ====================
+    if use_loo:
+        logger.info("Generating confusion matrices comparison...")
+        
+        llm_preds = llm_lasso_results.get('predictions')
+        std_preds = standard_lasso_results.get('predictions')
+        
+        if llm_preds is not None and std_preds is not None:
+            try:
+                llm_y_true = llm_preds['actual_label'].values
+                llm_y_pred = (llm_preds['predicted_probability'].values >= 0.5).astype(int)
+                std_y_true = std_preds['actual_label'].values
+                std_y_pred = (std_preds['predicted_probability'].values >= 0.5).astype(int)
+                
+                llm_cm = confusion_matrix(llm_y_true, llm_y_pred)
+                std_cm = confusion_matrix(std_y_true, std_y_pred)
+                
+                # Normalize confusion matrices
+                llm_cm_norm = llm_cm.astype('float') / llm_cm.sum(axis=1)[:, np.newaxis]
+                std_cm_norm = std_cm.astype('float') / std_cm.sum(axis=1)[:, np.newaxis]
+                
+                fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+                
+                # LLM-Lasso confusion matrix
+                sns.heatmap(llm_cm, annot=True, fmt='d', cmap='Reds', ax=axes[0],
+                           xticklabels=['Negative (0)', 'Positive (1)'],
+                           yticklabels=['Negative (0)', 'Positive (1)'],
+                           annot_kws={'size': 16, 'weight': 'bold'},
+                           cbar_kws={'label': 'Count'})
+                axes[0].set_xlabel('Predicted Label', fontsize=11)
+                axes[0].set_ylabel('True Label', fontsize=11)
+                axes[0].set_title(f'LLM-Lasso\n(Acc: {llm_summary.get("accuracy", 0):.3f})', 
+                                 fontsize=12, fontweight='bold')
+                
+                # Standard Lasso confusion matrix
+                sns.heatmap(std_cm, annot=True, fmt='d', cmap='Blues', ax=axes[1],
+                           xticklabels=['Negative (0)', 'Positive (1)'],
+                           yticklabels=['Negative (0)', 'Positive (1)'],
+                           annot_kws={'size': 16, 'weight': 'bold'},
+                           cbar_kws={'label': 'Count'})
+                axes[1].set_xlabel('Predicted Label', fontsize=11)
+                axes[1].set_ylabel('True Label', fontsize=11)
+                axes[1].set_title(f'Standard Lasso\n(Acc: {std_summary.get("accuracy", 0):.3f})', 
+                                 fontsize=12, fontweight='bold')
+                
+                fig.suptitle('Confusion Matrix Comparison', fontsize=14, fontweight='bold', y=1.02)
+                plt.tight_layout()
+                cm_file = os.path.join(save_dir, 'confusion_matrices_comparison.png')
+                fig.savefig(cm_file, dpi=300, bbox_inches='tight', facecolor='white')
+                plt.close(fig)
+                logger.info(f"  Saved: {cm_file}")
+                
+            except Exception as e:
+                logger.warning(f"Could not generate confusion matrix comparison: {e}")
+    
+    # ==================== Figure 4: Feature Selection Summary ====================
+    logger.info("Generating feature selection comparison...")
+    
+    llm_n_features = llm_summary.get('n_features', llm_summary.get('n_nonzero', 0))
+    std_n_features = std_summary.get('n_features', std_summary.get('n_nonzero', 0))
+    total_features = llm_summary.get('n_features_total', llm_summary.get('total_features', 
+                                     std_summary.get('n_features_total', std_summary.get('total_features', 1))))
+    
+    # Try to get from coefficients if available
+    try:
+        # Read coefficients JSON files
+        llm_coef_file = os.path.join(os.path.dirname(save_dir), 'model_coefficients.json')
+        std_coef_file = os.path.join(os.path.dirname(save_dir), 'standard_lasso', 'model_coefficients.json')
+        
+        if os.path.exists(llm_coef_file):
+            with open(llm_coef_file, 'r') as f:
+                llm_coef_data = json.load(f)
+                llm_n_features = llm_coef_data.get('final_model', {}).get('n_nonzero', llm_n_features)
+                total_features = len(llm_coef_data.get('feature_names', [total_features]))
+        
+        if os.path.exists(std_coef_file):
+            with open(std_coef_file, 'r') as f:
+                std_coef_data = json.load(f)
+                std_n_features = std_coef_data.get('final_model', {}).get('n_nonzero', std_n_features)
+    except Exception as e:
+        logger.debug(f"Could not read coefficient files: {e}")
+    
+    if llm_n_features and std_n_features:
+        fig, ax = plt.subplots(figsize=(8, 6))
+        
+        methods = ['LLM-Lasso', 'Standard Lasso']
+        selected = [llm_n_features, std_n_features]
+        not_selected = [total_features - llm_n_features, total_features - std_n_features]
+        
+        x = np.arange(len(methods))
+        width = 0.5
+        
+        bars1 = ax.bar(x, selected, width, label='Selected Features', 
+                      color=[colors['llm_lasso'], colors['standard_lasso']], 
+                      edgecolor='white', linewidth=2)
+        bars2 = ax.bar(x, not_selected, width, bottom=selected, label='Not Selected', 
+                      color=['#FADBD8', '#D4E6F1'], edgecolor='white', linewidth=2)
+        
+        # Add labels
+        for i, (s, ns) in enumerate(zip(selected, not_selected)):
+            ax.annotate(f'{s}', xy=(x[i], s/2), ha='center', va='center', 
+                       fontsize=14, fontweight='bold', color='white')
+            ax.annotate(f'{ns}', xy=(x[i], s + ns/2), ha='center', va='center', 
+                       fontsize=12, color='gray')
+        
+        ax.set_xlabel('Method', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Number of Features', fontsize=12, fontweight='bold')
+        ax.set_title(f'Feature Selection Comparison\n(Total: {total_features} features)', 
+                    fontsize=14, fontweight='bold')
+        ax.set_xticks(x)
+        ax.set_xticklabels(methods, fontsize=11)
+        ax.legend(loc='upper right', frameon=True, fancybox=True)
+        ax.set_ylim(0, total_features * 1.1)
+        
+        plt.tight_layout()
+        feat_file = os.path.join(save_dir, 'feature_selection_comparison.png')
+        fig.savefig(feat_file, dpi=300, bbox_inches='tight', facecolor='white')
+        plt.close(fig)
+        logger.info(f"  Saved: {feat_file}")
+        
+        comparison_stats['feature_selection'] = {
+            'llm_lasso': int(llm_n_features),
+            'standard_lasso': int(std_n_features),
+            'total_features': int(total_features)
+        }
+        logger.debug(f"  Feature Selection: LLM={llm_n_features}, STD={std_n_features}, Total={total_features}")
+    
+    # ==================== Figure 5: Summary Dashboard ====================
+    logger.info("Generating comparison dashboard...")
+    
+    fig = plt.figure(figsize=(16, 10))
+    
+    # Create grid
+    gs = fig.add_gridspec(2, 3, hspace=0.3, wspace=0.3)
+    
+    # Key metrics comparison (top left, spanning 2 columns)
+    ax1 = fig.add_subplot(gs[0, :2])
+    
+    if use_loo:
+        key_metrics = ['Accuracy', 'Sensitivity', 'Specificity', 'AUROC']
+        key_keys = ['accuracy', 'sensitivity', 'specificity', 'auroc']
+        llm_vals = [llm_summary.get(k, 0) for k in key_keys]
+        std_vals = [std_summary.get(k, 0) for k in key_keys]
+    else:
+        key_metrics = ['Accuracy', 'AUROC']
+        llm_vals = [1 - llm_summary.get('test_error', 0), llm_summary.get('auroc', 0)]
+        std_vals = [1 - std_summary.get('test_error', 0), std_summary.get('auroc', 0)]
+    
+    x = np.arange(len(key_metrics))
+    width = 0.35
+    
+    ax1.bar(x - width/2, llm_vals, width, label='LLM-Lasso', color=colors['llm_lasso'])
+    ax1.bar(x + width/2, std_vals, width, label='Standard Lasso', color=colors['standard_lasso'])
+    ax1.set_ylabel('Value')
+    ax1.set_title('Key Performance Metrics', fontweight='bold')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(key_metrics)
+    ax1.legend()
+    ax1.set_ylim(0, 1.1)
+    ax1.grid(True, alpha=0.3, axis='y')
+    
+    # Summary text (top right)
+    ax2 = fig.add_subplot(gs[0, 2])
+    ax2.axis('off')
+    
+    # Determine winner for each metric
+    summary_text = "COMPARISON SUMMARY\n" + "=" * 25 + "\n\n"
+    
+    llm_wins = 0
+    std_wins = 0
+    
+    for i, metric in enumerate(key_metrics):
+        llm_v = llm_vals[i] if llm_vals[i] is not None else 0
+        std_v = std_vals[i] if std_vals[i] is not None else 0
+        diff = llm_v - std_v
+        
+        if abs(diff) < 0.001:
+            winner = "TIE"
+        elif diff > 0:
+            winner = "LLM-Lasso"
+            llm_wins += 1
+        else:
+            winner = "Standard"
+            std_wins += 1
+        
+        summary_text += f"{metric}:\n"
+        summary_text += f"  LLM: {llm_v:.4f}\n"
+        summary_text += f"  Std: {std_v:.4f}\n"
+        summary_text += f"  Winner: {winner}\n\n"
+    
+    summary_text += "=" * 25 + "\n"
+    summary_text += f"LLM-Lasso wins: {llm_wins}\n"
+    summary_text += f"Standard wins: {std_wins}\n"
+    
+    ax2.text(0.1, 0.95, summary_text, transform=ax2.transAxes, fontsize=10,
+            verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+    
+    comparison_stats['overall'] = {
+        'llm_lasso_wins': int(llm_wins),
+        'standard_lasso_wins': int(std_wins)
+    }
+    logger.debug(f"  Overall: LLM wins={llm_wins}, STD wins={std_wins}")
+    
+    # Feature count comparison (bottom left)
+    ax3 = fig.add_subplot(gs[1, 0])
+    if llm_n_features and std_n_features:
+        methods = ['LLM-Lasso', 'Standard']
+        counts = [llm_n_features, std_n_features]
+        bars = ax3.bar(methods, counts, color=[colors['llm_lasso'], colors['standard_lasso']])
+        ax3.set_ylabel('Features Selected')
+        ax3.set_title('Sparsity Comparison', fontweight='bold')
+        for bar, count in zip(bars, counts):
+            ax3.annotate(f'{count}', xy=(bar.get_x() + bar.get_width()/2, bar.get_height()),
+                        xytext=(0, 3), textcoords="offset points", ha='center', fontweight='bold')
+    else:
+        ax3.text(0.5, 0.5, 'Feature counts\nnot available', ha='center', va='center')
+        ax3.set_title('Sparsity Comparison', fontweight='bold')
+    
+    # Performance improvement (bottom middle)
+    ax4 = fig.add_subplot(gs[1, 1])
+    if use_loo:
+        improvements = [(llm_vals[i] - std_vals[i]) * 100 for i in range(len(key_metrics))]
+        bar_colors = [colors['llm_lasso'] if imp > 0 else colors['standard_lasso'] for imp in improvements]
+        bars = ax4.bar(key_metrics, improvements, color=bar_colors)
+        ax4.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+        ax4.set_ylabel('Improvement (%)')
+        ax4.set_title('LLM-Lasso Improvement over Standard', fontweight='bold')
+        ax4.tick_params(axis='x', rotation=45)
+    else:
+        ax4.text(0.5, 0.5, 'Detailed metrics\nnot available', ha='center', va='center')
+        ax4.set_title('Improvement Analysis', fontweight='bold')
+    
+    # Method info (bottom right)
+    ax5 = fig.add_subplot(gs[1, 2])
+    ax5.axis('off')
+    
+    info_text = "ANALYSIS DETAILS\n" + "=" * 25 + "\n\n"
+    info_text += f"CV Method: {'LOO' if use_loo else 'Train/Test Split'}\n"
+    info_text += f"Samples: {llm_summary.get('n_samples', 'N/A')}\n"
+    info_text += f"Features: {total_features}\n"
+    info_text += f"Inner CV Folds: {llm_summary.get('inner_cv_folds', 'N/A')}\n"
+    info_text += f"SMOTE: {'Yes' if llm_summary.get('smote_enabled') else 'No'}\n"
+    
+    ax5.text(0.1, 0.95, info_text, transform=ax5.transAxes, fontsize=10,
+            verticalalignment='top', fontfamily='monospace',
+            bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+    
+    fig.suptitle('LLM-Lasso vs Standard Lasso: Comprehensive Comparison', 
+                fontsize=16, fontweight='bold', y=0.98)
+    
+    plt.tight_layout()
+    dashboard_file = os.path.join(save_dir, 'comparison_dashboard.png')
+    fig.savefig(dashboard_file, dpi=300, bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+    logger.info(f"  Saved: {dashboard_file}")
+    
+    logger.info(f"Generated comparison plots in {save_dir}")
+    
+    return comparison_stats
+
+
 def save_gridsearch_plots(
     cv_result,
     save_dir: str,
@@ -2468,6 +3016,14 @@ def run_lasso_with_loo(
             
             # Get best lambda index using the specified optimization metric
             best_lambda_idx = select_best_lambda(fit, optimize_metric)
+            best_lambda = fit.lmdas[best_lambda_idx]
+            best_accuracy = 1.0 - fit.test_error[best_lambda_idx]
+            
+            # Debug log for each fold
+            sens_val = fit.sensitivity[best_lambda_idx] if fit.sensitivity is not None else 0.0
+            spec_val = fit.specificity[best_lambda_idx] if fit.specificity is not None else 0.0
+            logger.debug(f"  [LLM-LASSO] Fold {i+1}: Best λ={best_lambda:.2e}, "
+                        f"Acc={best_accuracy:.4f}, Sens={sens_val:.4f}, Spec={spec_val:.4f}")
             
             # Store gridsearch results for this LOO fold (including extended metrics)
             loo_gridsearch_results.append({
@@ -2481,7 +3037,7 @@ def run_lasso_with_loo(
                 'avg_losses': fit.avg_losses.copy(),
                 'roc_auc': fit.roc_auc.copy() if fit.roc_auc is not None else None,
                 'best_idx': best_lambda_idx,
-                'best_lambda': fit.lmdas[best_lambda_idx]
+                'best_lambda': best_lambda
             })
             
             # Train final model with best lambda on all (resampled) training data
@@ -2546,6 +3102,18 @@ def run_lasso_with_loo(
     
     loo_time = time.time() - start_time
     logger.info(f"LOO cross-validation completed in {loo_time:.2f}s")
+    
+    # Summary debug logging for LLM-Lasso
+    logger.debug("")
+    logger.debug("=" * 50)
+    logger.debug("[LLM-LASSO] LOO SUMMARY")
+    logger.debug("=" * 50)
+    if loo_gridsearch_results:
+        all_best_lambdas = [r['best_lambda'] for r in loo_gridsearch_results]
+        logger.debug(f"  Best λ range: [{min(all_best_lambdas):.2e}, {max(all_best_lambdas):.2e}]")
+        logger.debug(f"  Best λ median: {np.median(all_best_lambdas):.2e}")
+        all_best_acc = [1.0 - r['test_error'][r['best_idx']] for r in loo_gridsearch_results]
+        logger.debug(f"  Inner CV Accuracy: mean={np.mean(all_best_acc):.4f}, std={np.std(all_best_acc):.4f}")
     
     # Extract and aggregate coefficients from all LOO folds
     logger.info("")
@@ -2800,6 +3368,502 @@ def run_lasso_with_loo(
     }
 
 
+def run_standard_lasso_with_loo(
+    X: pd.DataFrame,
+    y: pd.Series,
+    save_dir: str,
+    inner_cv_folds: int,
+    n_threads: int,
+    logger: logging.Logger,
+    participant_ids: Optional[pd.Index] = None,
+    use_smote: bool = False,
+    smote_random_state: int = 42,
+    lmda_path_size: int = 100,
+    optimize_metric: str = "accuracy",
+    compute_ci: bool = True,
+    bootstrap_method: str = "standard",
+    bootstrap_n_rounds: int = 1000,
+    ci_level: float = 0.95
+) -> Dict[str, Any]:
+    """
+    Run STANDARD Lasso (uniform penalties) with Leave-One-Out outer CV and inner k-fold CV.
+    
+    This is identical to run_lasso_with_loo() but uses uniform penalty factors
+    instead of LLM-generated penalties. This serves as a baseline for comparison.
+    
+    Args:
+        X: Feature matrix (all samples)
+        y: Target labels (all samples)
+        save_dir: Directory to save results (should be standard_lasso subfolder)
+        inner_cv_folds: Number of inner CV folds for hyperparameter selection
+        n_threads: Number of threads
+        logger: Logger instance
+        participant_ids: Optional participant IDs (uses index if not provided)
+        use_smote: Whether to apply SMOTE to balance training data
+        smote_random_state: Random state for SMOTE reproducibility
+        lmda_path_size: Number of lambda values in the regularization path
+        optimize_metric: Metric to maximize during hyperparameter selection
+        compute_ci: Whether to compute bootstrap confidence intervals
+        bootstrap_method: Bootstrap method ('standard' or '632')
+        bootstrap_n_rounds: Number of bootstrap iterations
+        ci_level: Confidence level (e.g., 0.95 for 95% CI)
+    
+    Returns:
+        Dictionary with predictions and evaluation results
+    """
+    logger.info("=" * 60)
+    logger.info("STANDARD LASSO WITH LEAVE-ONE-OUT CROSS-VALIDATION")
+    logger.info("=" * 60)
+    logger.info("Using UNIFORM penalty factors (baseline comparison)")
+    
+    if not ADELIE_AVAILABLE:
+        logger.warning("=" * 60)
+        logger.warning("ADELIE NOT INSTALLED - SKIPPING STANDARD LASSO")
+        logger.warning("=" * 60)
+        return {"predictions": None, "summary": {"lasso_skipped": True}}
+    
+    # Check SMOTE availability
+    if use_smote and not SMOTE_AVAILABLE:
+        logger.warning("SMOTE requested but imbalanced-learn not installed!")
+        logger.warning("Proceeding without SMOTE...")
+        use_smote = False
+    
+    n_samples = len(X)
+    n_features = X.shape[1]
+    class_counts = y.value_counts().sort_index()
+    
+    logger.info(f"Total samples: {n_samples}")
+    logger.info(f"Features: {n_features}")
+    logger.info(f"Class distribution: {dict(class_counts)}")
+    logger.info(f"Class imbalance ratio: {class_counts.max() / class_counts.min():.2f}:1")
+    logger.info(f"Inner CV folds: {inner_cv_folds}")
+    logger.info(f"Outer CV: Leave-One-Out ({n_samples} iterations)")
+    logger.info(f"Lambda path size: {lmda_path_size} (regularization parameters)")
+    logger.info(f"Optimization metric: {optimize_metric}")
+    logger.info(f"Threads: {n_threads}")
+    logger.info(f"SMOTE: {'Enabled' if use_smote else 'Disabled'}")
+    logger.info(f"Bootstrap CI: {'Enabled' if compute_ci else 'Disabled'}")
+    
+    # Use index as participant IDs if not provided
+    if participant_ids is None:
+        participant_ids = X.index
+    
+    # Storage for predictions
+    predictions = []
+    
+    # Storage for gridsearch results from each LOO fold
+    loo_gridsearch_results = []
+    
+    # LOO outer loop
+    logger.info("")
+    logger.info("Starting LOO cross-validation (Standard Lasso)...")
+    start_time = time.time()
+    
+    for i in range(n_samples):
+        # Create LOO split
+        test_idx = [i]
+        train_idx = [j for j in range(n_samples) if j != i]
+        
+        X_train = X.iloc[train_idx]
+        y_train = y.iloc[train_idx]
+        X_test = X.iloc[test_idx]
+        y_test = y.iloc[test_idx]
+        
+        # Scale features (before SMOTE to maintain consistent scaling)
+        train_center = X_train.mean(axis=0)
+        train_scale = X_train.std(axis=0)
+        X_train_scaled = scale_cols(X_train)
+        X_test_scaled = scale_cols(X_test, center=train_center, scale=train_scale)
+        
+        # Apply SMOTE to balance training data (if enabled)
+        if use_smote:
+            try:
+                smote = SMOTE(random_state=smote_random_state + i, k_neighbors=min(5, y_train.value_counts().min() - 1))
+                X_train_resampled, y_train_resampled = smote.fit_resample(
+                    X_train_scaled.to_numpy(), 
+                    y_train.to_numpy()
+                )
+            except Exception as e:
+                logger.debug(f"  LOO fold {i+1}: SMOTE failed ({e}), using original data")
+                X_train_resampled = X_train_scaled.to_numpy()
+                y_train_resampled = y_train.to_numpy()
+        else:
+            X_train_resampled = X_train_scaled.to_numpy()
+            y_train_resampled = y_train.to_numpy()
+        
+        # Initialize GLM for binomial classification
+        glm_train = ad.glm.binomial(y=y_train_resampled, dtype=np.float64)
+        
+        # STANDARD LASSO: Use uniform penalty factors (all features penalized equally)
+        pf = np.ones(X_train_resampled.shape[1])
+        pf = pf / np.sum(pf) * X_train_resampled.shape[1]  # Normalize same as LLM-Lasso
+        
+        try:
+            # Inner CV for lambda selection
+            fit = cv_grpnet(
+                X=X_train_resampled,
+                glm=glm_train,
+                seed=42 + i,
+                n_folds=inner_cv_folds,
+                lmda_path_size=lmda_path_size,
+                min_ratio=0.01,
+                alpha=1.0,  # Pure L1
+                penalty=pf,
+                n_threads=n_threads,
+                progress_bar=False
+            )
+            
+            # Get best lambda index using the specified optimization metric
+            best_lambda_idx = select_best_lambda(fit, optimize_metric)
+            best_lambda = fit.lmdas[best_lambda_idx]
+            best_accuracy = 1.0 - fit.test_error[best_lambda_idx]
+            
+            # Debug log for each fold
+            sens_val = fit.sensitivity[best_lambda_idx] if fit.sensitivity is not None else 0.0
+            spec_val = fit.specificity[best_lambda_idx] if fit.specificity is not None else 0.0
+            logger.debug(f"  [STD-LASSO] Fold {i+1}: Best λ={best_lambda:.2e}, "
+                        f"Acc={best_accuracy:.4f}, Sens={sens_val:.4f}, Spec={spec_val:.4f}")
+            
+            # Store gridsearch results for this LOO fold
+            loo_gridsearch_results.append({
+                'fold': i,
+                'lmdas': fit.lmdas.copy(),
+                'test_error': fit.test_error.copy(),
+                'sensitivity': fit.sensitivity.copy() if fit.sensitivity is not None else None,
+                'specificity': fit.specificity.copy() if fit.specificity is not None else None,
+                'balanced_accuracy': fit.balanced_accuracy.copy() if fit.balanced_accuracy is not None else None,
+                'f1': fit.f1.copy() if fit.f1 is not None else None,
+                'avg_losses': fit.avg_losses.copy(),
+                'roc_auc': fit.roc_auc.copy() if fit.roc_auc is not None else None,
+                'best_idx': best_lambda_idx,
+                'best_lambda': best_lambda
+            })
+            
+            # Train final model with best lambda on all training data
+            model = grpnet(
+                X=X_train_resampled,
+                glm=glm_train,
+                ddev_tol=0,
+                early_exit=False,
+                n_threads=n_threads,
+                min_ratio=0.01,
+                progress_bar=False,
+                alpha=1.0,
+                penalty=pf,
+            )
+            
+            # Predict on test sample
+            etas = predict(
+                X=X_test_scaled.to_numpy(),
+                betas=model.betas,
+                intercepts=model.intercepts,
+                n_threads=n_threads,
+            )
+            
+            # Convert eta to probability using sigmoid
+            eta_best = etas[best_lambda_idx, 0]
+            prob = 1.0 / (1.0 + np.exp(-eta_best))
+            
+        except Exception as e:
+            logger.warning(f"  LOO fold {i+1}/{n_samples}: Error - {e}, using 0.5 probability")
+            prob = 0.5
+        
+        # Extract coefficients at best lambda
+        try:
+            coef_raw = model.betas[best_lambda_idx, :]
+            if hasattr(coef_raw, 'toarray'):
+                coef_at_best = np.asarray(coef_raw.toarray()).flatten()
+            elif hasattr(coef_raw, 'todense'):
+                coef_at_best = np.asarray(coef_raw.todense()).flatten()
+            else:
+                coef_at_best = np.asarray(coef_raw).flatten()
+            intercept_at_best = float(model.intercepts[best_lambda_idx])
+        except Exception as e:
+            logger.debug(f"  LOO fold {i+1}: Could not extract coefficients: {e}")
+            coef_at_best = np.zeros(X.shape[1])
+            intercept_at_best = 0.0
+        
+        # Store prediction and coefficients
+        predictions.append({
+            'participant_id': participant_ids[i],
+            'actual_label': int(y_test.iloc[0]),
+            'predicted_probability': float(prob),
+            'coefficients': coef_at_best,
+            'intercept': float(intercept_at_best)
+        })
+        
+        # Progress logging every 10%
+        if (i + 1) % max(1, n_samples // 10) == 0 or i == n_samples - 1:
+            logger.info(f"  LOO progress (Standard Lasso): {i+1}/{n_samples} ({100*(i+1)/n_samples:.0f}%)")
+    
+    loo_time = time.time() - start_time
+    logger.info(f"Standard Lasso LOO cross-validation completed in {loo_time:.2f}s")
+    
+    # Summary debug logging for Standard Lasso
+    logger.debug("")
+    logger.debug("=" * 50)
+    logger.debug("[STD-LASSO] LOO SUMMARY")
+    logger.debug("=" * 50)
+    if loo_gridsearch_results:
+        all_best_lambdas = [r['best_lambda'] for r in loo_gridsearch_results]
+        logger.debug(f"  Best λ range: [{min(all_best_lambdas):.2e}, {max(all_best_lambdas):.2e}]")
+        logger.debug(f"  Best λ median: {np.median(all_best_lambdas):.2e}")
+        all_best_acc = [1.0 - r['test_error'][r['best_idx']] for r in loo_gridsearch_results]
+        logger.debug(f"  Inner CV Accuracy: mean={np.mean(all_best_acc):.4f}, std={np.std(all_best_acc):.4f}")
+    
+    # Extract and aggregate coefficients from all LOO folds
+    logger.info("")
+    logger.info("Extracting and aggregating model coefficients...")
+    feature_names = list(X.columns)
+    all_coefficients = np.array([p['coefficients'] for p in predictions])
+    all_intercepts = np.array([p['intercept'] for p in predictions])
+    
+    # Calculate mean and std of coefficients across folds
+    mean_coefficients = np.mean(all_coefficients, axis=0)
+    std_coefficients = np.std(all_coefficients, axis=0)
+    mean_intercept = np.mean(all_intercepts)
+    std_intercept = np.std(all_intercepts)
+    
+    # Count how many folds each feature was non-zero
+    non_zero_counts = np.sum(all_coefficients != 0, axis=0)
+    selection_frequency = non_zero_counts / n_samples
+    
+    logger.info(f"  Features with non-zero mean coefficient: {np.sum(mean_coefficients != 0)}/{len(feature_names)}")
+    logger.info(f"  Features selected in >50% of folds: {np.sum(selection_frequency > 0.5)}/{len(feature_names)}")
+    
+    # Train a final model on ALL data for stable coefficient estimates
+    logger.info("Training final Standard Lasso model on all data...")
+    try:
+        X_all_scaled = scale_cols(X)
+        
+        # Apply SMOTE if enabled for final model
+        if use_smote:
+            smote_final = SMOTE(random_state=smote_random_state, k_neighbors=min(5, y.value_counts().min() - 1))
+            X_final_resampled, y_final_resampled = smote_final.fit_resample(X_all_scaled.to_numpy(), y.to_numpy())
+        else:
+            X_final_resampled = X_all_scaled.to_numpy()
+            y_final_resampled = y.to_numpy()
+        
+        glm_final = ad.glm.binomial(y=y_final_resampled, dtype=np.float64)
+        
+        # UNIFORM PENALTIES for final model
+        pf_final = np.ones(X_final_resampled.shape[1])
+        pf_final = pf_final / np.sum(pf_final) * X_final_resampled.shape[1]
+        
+        # CV on all data for lambda selection
+        fit_final = cv_grpnet(
+            X=X_final_resampled,
+            glm=glm_final,
+            seed=42,
+            n_folds=inner_cv_folds,
+            lmda_path_size=lmda_path_size,
+            min_ratio=0.01,
+            alpha=1.0,
+            penalty=pf_final,
+            n_threads=n_threads,
+            progress_bar=False
+        )
+        
+        best_lambda_final = select_best_lambda(fit_final, optimize_metric)
+        
+        # Save gridsearch plots for the final model
+        logger.info("Saving gridsearch parameter search plots...")
+        save_gridsearch_plots(fit_final, save_dir, logger, fold_label="final_model", optimize_metric=optimize_metric)
+        
+        # Save gridsearch plots for each LOO fold
+        logger.info("Saving LOO fold gridsearch plots...")
+        save_loo_gridsearch_plots(loo_gridsearch_results, save_dir, logger, optimize_metric=optimize_metric)
+        
+        model_final = grpnet(
+            X=X_final_resampled,
+            glm=glm_final,
+            ddev_tol=0,
+            early_exit=False,
+            n_threads=n_threads,
+            min_ratio=0.01,
+            progress_bar=False,
+            alpha=1.0,
+            penalty=pf_final,
+        )
+        
+        coef_raw_final = model_final.betas[best_lambda_final, :]
+        if hasattr(coef_raw_final, 'toarray'):
+            final_coefficients = np.asarray(coef_raw_final.toarray()).flatten()
+        elif hasattr(coef_raw_final, 'todense'):
+            final_coefficients = np.asarray(coef_raw_final.todense()).flatten()
+        else:
+            final_coefficients = np.asarray(coef_raw_final).flatten()
+        final_intercept = float(model_final.intercepts[best_lambda_final])
+        logger.info(f"  Final model: {np.sum(final_coefficients != 0)} non-zero coefficients")
+    except Exception as e:
+        logger.warning(f"Could not train final model: {e}")
+        final_coefficients = mean_coefficients
+        final_intercept = mean_intercept
+    
+    # Create coefficients dictionary
+    coefficients_data = {
+        "method": "standard_lasso",
+        "feature_names": feature_names,
+        "final_model": {
+            "coefficients": {name: float(coef) for name, coef in zip(feature_names, final_coefficients)},
+            "intercept": float(final_intercept),
+            "n_nonzero": int(np.sum(final_coefficients != 0))
+        },
+        "loo_aggregated": {
+            "mean_coefficients": {name: float(coef) for name, coef in zip(feature_names, mean_coefficients)},
+            "std_coefficients": {name: float(std) for name, std in zip(feature_names, std_coefficients)},
+            "selection_frequency": {name: float(freq) for name, freq in zip(feature_names, selection_frequency)},
+            "mean_intercept": float(mean_intercept),
+            "std_intercept": float(std_intercept)
+        }
+    }
+    
+    # Save coefficients to JSON
+    coef_file = os.path.join(save_dir, "model_coefficients.json")
+    with open(coef_file, 'w') as f:
+        json.dump(coefficients_data, f, indent=2)
+    logger.info(f"Coefficients saved to: {coef_file}")
+    
+    # Generate coefficient bar plot
+    generate_coefficient_plot(
+        feature_names=feature_names,
+        coefficients=final_coefficients,
+        mean_coefficients=mean_coefficients,
+        std_coefficients=std_coefficients,
+        selection_frequency=selection_frequency,
+        save_dir=save_dir,
+        logger=logger
+    )
+    
+    # Create predictions DataFrame
+    predictions_for_csv = [{
+        'participant_id': p['participant_id'],
+        'actual_label': p['actual_label'],
+        'predicted_probability': p['predicted_probability']
+    } for p in predictions]
+    predictions_df = pd.DataFrame(predictions_for_csv)
+    
+    # Save predictions CSV
+    predictions_file = os.path.join(save_dir, "loo_predictions.csv")
+    predictions_df.to_csv(predictions_file, index=False)
+    logger.info(f"Predictions saved to: {predictions_file}")
+    
+    # Extract arrays for evaluation
+    y_true = predictions_df['actual_label'].values
+    y_prob = predictions_df['predicted_probability'].values
+    y_pred = (y_prob > 0.5).astype(int)
+    
+    # Generate comprehensive evaluation plots and compute all metrics
+    metrics = generate_evaluation_plots(y_true, y_prob, save_dir, logger)
+    
+    # Compute bootstrap confidence intervals
+    ci_results = None
+    if compute_ci:
+        logger.info("")
+        logger.info("Computing bootstrap confidence intervals...")
+        try:
+            from llm_lasso.utils.bootstrap_ci import compute_bootstrap_ci, plot_confidence_intervals
+            
+            ci_dir = os.path.join(save_dir, "confidence_intervals")
+            os.makedirs(ci_dir, exist_ok=True)
+            
+            ci_results = compute_bootstrap_ci(
+                y_true=y_true,
+                y_pred=y_pred,
+                y_prob=y_prob,
+                method=bootstrap_method,
+                n_rounds=bootstrap_n_rounds,
+                ci_level=ci_level,
+                random_seed=42,
+                logger=logger
+            )
+            
+            # Save confidence intervals to JSON
+            ci_file = os.path.join(ci_dir, "confidence_intervals.json")
+            with open(ci_file, 'w') as f:
+                json.dump({
+                    "method": bootstrap_method,
+                    "n_rounds": bootstrap_n_rounds,
+                    "ci_level": ci_level,
+                    "metrics": ci_results
+                }, f, indent=2)
+            logger.info(f"Confidence intervals saved to: {ci_file}")
+            
+            # Generate and save CI visualization plots
+            logger.info("Generating confidence interval plots...")
+            plot_confidence_intervals(
+                ci_results=ci_results,
+                save_dir=ci_dir,
+                ci_level=ci_level,
+                logger=logger
+            )
+            
+        except ImportError as e:
+            logger.warning(f"Could not import bootstrap module: {e}")
+        except Exception as e:
+            logger.warning(f"Error computing confidence intervals: {e}")
+    
+    # Create summary with all metrics
+    class_counts = y.value_counts().sort_index()
+    summary = {
+        "method": "standard_lasso",
+        "cv_method": "Leave-One-Out",
+        "inner_cv_folds": inner_cv_folds,
+        "n_samples": n_samples,
+        "n_features": X.shape[1],
+        "class_distribution": {str(k): int(v) for k, v in class_counts.items()},
+        "class_imbalance_ratio": float(class_counts.max() / class_counts.min()),
+        "smote_enabled": use_smote,
+        "loo_time_seconds": float(loo_time),
+        "bootstrap_ci": {
+            "computed": ci_results is not None,
+            "method": bootstrap_method if ci_results else None,
+            "n_rounds": bootstrap_n_rounds if ci_results else None,
+            "ci_level": ci_level if ci_results else None
+        },
+        **metrics
+    }
+    
+    # Add CI bounds to summary for key metrics
+    if ci_results:
+        for metric_name in ['accuracy', 'balanced_accuracy', 'sensitivity', 'specificity', 'f1', 'auroc']:
+            if metric_name in ci_results:
+                ci_data = ci_results[metric_name]
+                summary[f"{metric_name}_ci_lower"] = ci_data.get('ci_lower')
+                summary[f"{metric_name}_ci_upper"] = ci_data.get('ci_upper')
+    
+    summary_file = os.path.join(save_dir, "summary.json")
+    with open(summary_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"Summary saved to: {summary_file}")
+    
+    # Log final results
+    logger.info("")
+    logger.info("=" * 60)
+    logger.info("STANDARD LASSO LOO CROSS-VALIDATION FINAL RESULTS")
+    logger.info("=" * 60)
+    
+    def format_metric_log(name: str, value: float, ci_key: str = None) -> str:
+        if ci_results and ci_key and ci_key in ci_results:
+            ci = ci_results[ci_key]
+            if ci.get('ci_lower') is not None and ci.get('ci_upper') is not None:
+                return f"{name}: {value:.4f} ({int(ci_level*100)}% CI: {ci['ci_lower']:.4f} - {ci['ci_upper']:.4f})"
+        return f"{name}: {value:.4f}"
+    
+    logger.info(format_metric_log("AUROC", metrics['auroc'], 'auroc'))
+    logger.info(format_metric_log("Accuracy", metrics['accuracy'], 'accuracy') + f" ({int(metrics['accuracy'] * n_samples)}/{n_samples} correct)")
+    logger.info(format_metric_log("Balanced Accuracy", metrics['balanced_accuracy'], 'balanced_accuracy'))
+    logger.info(format_metric_log("Sensitivity", metrics['sensitivity'], 'sensitivity'))
+    logger.info(format_metric_log("Specificity", metrics['specificity'], 'specificity'))
+    logger.info(format_metric_log("F1 Score", metrics['f1_score'], 'f1'))
+    logger.info(format_metric_log("MCC", metrics['mcc'], 'mcc'))
+    
+    return {
+        "predictions": predictions_df,
+        "summary": summary
+    }
+
+
 def run_lasso_with_penalties(
     X_train: pd.DataFrame,
     y_train: pd.Series,
@@ -2924,6 +3988,154 @@ def run_lasso_with_penalties(
         "best_method": str(best_result.get('method', 'N/A')),
         "best_method_model": str(best_result.get('best_method_model', 'N/A')),
         "test_error": float(best_result['test_error']),
+        "auroc": float(best_result.get('auroc', 0)) if best_result.get('auroc') is not None else None,
+        "n_features": int(best_result['n_features']),
+        "total_features": X_train.shape[1],
+        "training_samples": len(X_train),
+        "test_samples": len(X_test)
+    }
+    
+    summary_file = os.path.join(save_dir, "summary.json")
+    with open(summary_file, 'w') as f:
+        json.dump(summary, f, indent=2)
+    logger.info(f"Summary saved to: {summary_file}")
+    
+    return {
+        "results": results,
+        "summary": summary
+    }
+
+
+def run_standard_lasso_with_penalties(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    save_dir: str,
+    n_threads: int,
+    folds_cv: int,
+    logger: logging.Logger,
+    lmda_path_size: int = 100
+) -> Dict[str, Any]:
+    """
+    Run STANDARD Lasso classification with uniform penalty factors (baseline).
+    
+    This is identical to run_lasso_with_penalties() but uses uniform penalty
+    factors instead of LLM-generated penalties.
+    
+    Args:
+        X_train: Training features
+        y_train: Training labels
+        X_test: Test features
+        y_test: Test labels
+        save_dir: Directory to save results (should be standard_lasso subfolder)
+        n_threads: Number of threads
+        folds_cv: Number of CV folds
+        logger: Logger instance
+        lmda_path_size: Number of lambda values in the regularization path
+    
+    Returns:
+        Dictionary with evaluation results
+    """
+    logger.info("=" * 60)
+    logger.info("STANDARD LASSO CLASSIFICATION")
+    logger.info("=" * 60)
+    logger.info("Using UNIFORM penalty factors (baseline comparison)")
+    
+    if not ADELIE_AVAILABLE:
+        logger.warning("=" * 60)
+        logger.warning("ADELIE NOT INSTALLED - SKIPPING STANDARD LASSO")
+        logger.warning("=" * 60)
+        
+        summary = {
+            "lasso_skipped": True,
+            "method": "standard_lasso",
+            "reason": "adelie not installed",
+            "total_features": X_train.shape[1],
+            "training_samples": len(X_train),
+            "test_samples": len(X_test)
+        }
+        
+        summary_file = os.path.join(save_dir, "summary.json")
+        with open(summary_file, 'w') as f:
+            json.dump(summary, f, indent=2)
+        logger.info(f"Summary saved to: {summary_file}")
+        
+        return {
+            "results": None,
+            "summary": summary
+        }
+    
+    logger.info(f"Training samples: {len(X_train)}")
+    logger.info(f"Test samples: {len(X_test)}")
+    logger.info(f"Features: {X_train.shape[1]}")
+    logger.info(f"CV folds: {folds_cv}")
+    logger.info(f"Threads: {n_threads}")
+    
+    from llm_lasso.task_specific_lasso.llm_lasso import llm_lasso_cv, PenaltyType
+    
+    logger.info("Running Standard Lasso CV (uniform penalties)...")
+    logger.info(f"Lambda path size: {lmda_path_size} (regularization parameters)")
+    start_time = time.time()
+    
+    # STANDARD LASSO: Use uniform penalties (importance = 1 for all features)
+    # Since llm_lasso_cv uses penalty = 1/score when score_type=PenaltyType.IMP,
+    # we pass uniform scores of 1.0 to get uniform penalties
+    uniform_scores = np.ones(X_train.shape[1])
+    
+    results = llm_lasso_cv(
+        x_train=X_train,
+        y_train=y_train,
+        x_test=X_test,
+        y_test=y_test,
+        score=uniform_scores,
+        regression=False,  # Classification
+        score_type=PenaltyType.IMP,  # Importance scores (1/imp = 1/1 = uniform penalty)
+        folds_cv=folds_cv,
+        seed=42,
+        n_threads=n_threads,
+        alpha=1.0,  # Pure L1
+        max_imp_pow=0,  # Only use 1/imp^0 = uniform penalties
+        lmda_path_size=lmda_path_size
+    )
+    
+    lasso_time = time.time() - start_time
+    logger.info(f"Standard Lasso training completed in {lasso_time:.2f}s")
+    
+    # Log results
+    logger.info("=" * 60)
+    logger.info("STANDARD LASSO RESULTS")
+    logger.info("=" * 60)
+    
+    logger.info(f"Results shape: {results.shape}")
+    logger.debug(f"Results columns: {list(results.columns)}")
+    
+    # Find best result (filter to only Lasso results, not 1/imp variants)
+    lasso_results = results[results['method'] == 'Lasso']
+    if len(lasso_results) == 0:
+        lasso_results = results
+    
+    best_idx = lasso_results['test_error'].idxmin()
+    best_result = results.loc[best_idx]
+    
+    logger.info(f"Best Model:")
+    logger.info(f"  Method: {best_result.get('method', 'N/A')}")
+    logger.info(f"  Test error: {best_result['test_error']:.4f}")
+    logger.info(f"  AUROC: {best_result.get('auroc', 'N/A')}")
+    logger.info(f"  Number of features: {best_result['n_features']}")
+    
+    # Save results
+    results_file = os.path.join(save_dir, "lasso_results.csv")
+    results.to_csv(results_file, index=False)
+    logger.info(f"Results saved to: {results_file}")
+    
+    # Save summary
+    summary = {
+        "method": "standard_lasso",
+        "best_method": str(best_result.get('method', 'N/A')),
+        "best_method_model": str(best_result.get('best_method_model', 'N/A')),
+        "test_error": float(best_result['test_error']),
+        "accuracy": float(1 - best_result['test_error']),  # Accuracy = 1 - test_error
         "auroc": float(best_result.get('auroc', 0)) if best_result.get('auroc') is not None else None,
         "n_features": int(best_result['n_features']),
         "total_features": X_train.shape[1],
@@ -3250,6 +4462,84 @@ def main():
                 lmda_path_size=args.lmda_path_size
             )
         
+        # Step 7b: Run Standard Lasso for comparison
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("STEP 7b: RUNNING STANDARD LASSO FOR COMPARISON")
+        logger.info("=" * 60)
+        
+        standard_lasso_dir = os.path.join(args.save_dir, "standard_lasso")
+        os.makedirs(standard_lasso_dir, exist_ok=True)
+        
+        if args.use_loo:
+            # Use Leave-One-Out cross-validation for standard lasso
+            standard_lasso_result = run_standard_lasso_with_loo(
+                X=X_imputed,
+                y=y,
+                save_dir=standard_lasso_dir,
+                inner_cv_folds=args.inner_cv_folds,
+                n_threads=args.n_threads,
+                logger=logger,
+                participant_ids=X_imputed.index,
+                use_smote=args.use_smote,
+                smote_random_state=args.smote_random_state,
+                lmda_path_size=args.lmda_path_size,
+                optimize_metric=args.optimize_metric,
+                compute_ci=args.compute_ci,
+                bootstrap_method=args.bootstrap_method,
+                bootstrap_n_rounds=args.bootstrap_n_rounds,
+                ci_level=args.ci_level
+            )
+        else:
+            # Use standard train/test split for standard lasso
+            standard_lasso_result = run_standard_lasso_with_penalties(
+                X_train=X_train,
+                y_train=y_train,
+                X_test=X_test,
+                y_test=y_test,
+                save_dir=standard_lasso_dir,
+                n_threads=args.n_threads,
+                folds_cv=args.folds_cv,
+                logger=logger,
+                lmda_path_size=args.lmda_path_size
+            )
+        
+        # Step 8: Generate comparison plots
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("STEP 8: GENERATING COMPARISON PLOTS")
+        logger.info("=" * 60)
+        
+        comparison_dir = os.path.join(args.save_dir, "comparison")
+        os.makedirs(comparison_dir, exist_ok=True)
+        
+        comparison_stats = generate_comparison_plots(
+            llm_lasso_results=lasso_result,
+            standard_lasso_results=standard_lasso_result,
+            save_dir=comparison_dir,
+            logger=logger,
+            use_loo=args.use_loo
+        )
+        
+        # Save comparison summary JSON
+        comparison_summary = {
+            "llm_lasso": {
+                "method": "llm_lasso",
+                "summary": lasso_result.get('summary', {})
+            },
+            "standard_lasso": {
+                "method": "standard_lasso",
+                "summary": standard_lasso_result.get('summary', {})
+            },
+            "comparison_stats": comparison_stats
+        }
+        
+        comparison_summary_file = os.path.join(comparison_dir, "comparison_summary.json")
+        with open(comparison_summary_file, 'w') as f:
+            # Convert numpy types to JSON-serializable Python types
+            json.dump(convert_to_json_serializable(comparison_summary), f, indent=2)
+        logger.info(f"Comparison summary saved to: {comparison_summary_file}")
+        
         # Pipeline complete
         pipeline_time = time.time() - pipeline_start
         
@@ -3260,13 +4550,23 @@ def main():
         logger.info(f"Total pipeline time: {pipeline_time:.2f}s ({pipeline_time/60:.1f} minutes)")
         logger.info(f"Results saved to: {args.save_dir}")
         logger.info("")
-        logger.info("Output files:")
+        logger.info("Output directories:")
+        logger.info(f"  - {args.save_dir}/ (LLM-Lasso results)")
+        logger.info(f"  - {standard_lasso_dir}/ (Standard Lasso results)")
+        logger.info(f"  - {comparison_dir}/ (Comparison plots)")
+        logger.info("")
+        logger.info("Key output files:")
         logger.info(f"  - {os.path.join(args.save_dir, 'penalty_scores.json')}")
         if args.use_loo:
             logger.info(f"  - {os.path.join(args.save_dir, 'loo_predictions.csv')}")
+            logger.info(f"  - {os.path.join(standard_lasso_dir, 'loo_predictions.csv')}")
         elif lasso_result.get('results') is not None:
             logger.info(f"  - {os.path.join(args.save_dir, 'lasso_results.csv')}")
+            logger.info(f"  - {os.path.join(standard_lasso_dir, 'lasso_results.csv')}")
         logger.info(f"  - {os.path.join(args.save_dir, 'summary.json')}")
+        logger.info(f"  - {os.path.join(standard_lasso_dir, 'summary.json')}")
+        logger.info(f"  - {comparison_summary_file}")
+        logger.info(f"  - {os.path.join(comparison_dir, 'comparison_dashboard.png')}")
         logger.info(f"  - {log_file}")
         logger.info("")
         
@@ -3275,33 +4575,63 @@ def main():
             logger.info("Lasso training was skipped (adelie not installed)")
             logger.info("To run Lasso, install adelie: cd adelie-fork && pip install -e .")
         elif args.use_loo:
-            summary = lasso_result['summary']
-            logger.info(f"LOO Cross-Validation Results:")
-            logger.info(f"  AUROC: {summary['auroc']:.4f}")
-            logger.info(f"  Accuracy: {summary['accuracy']:.4f} ({summary['true_positives'] + summary['true_negatives']}/{summary['n_samples']} correct)")
-            logger.info(f"  Balanced Accuracy: {summary['balanced_accuracy']:.4f}")
-            logger.info(f"  Sensitivity: {summary['sensitivity']:.4f}")
-            logger.info(f"  Specificity: {summary['specificity']:.4f}")
-            logger.info(f"  F1 Score: {summary['f1_score']:.4f}")
-            logger.info(f"  MCC: {summary['mcc']:.4f}")
-            logger.info(f"  Log Loss: {summary['log_loss']:.4f}")
-            logger.info(f"  Brier Score: {summary['brier_score']:.4f}")
-            logger.info(f"")
-            logger.info(f"Generated files:")
-            logger.info(f"  - loo_predictions.csv (per-sample predictions)")
-            logger.info(f"  - roc_curve.png")
-            logger.info(f"  - precision_recall_curve.png") 
-            logger.info(f"  - confusion_matrix.png")
-            logger.info(f"  - probability_distribution.png")
-            logger.info(f"  - calibration_curve.png")
-            logger.info(f"  - metrics_summary.png")
-            logger.info(f"  - performance_dashboard.png")
-            logger.info(f"  - detailed_metrics.json")
-            logger.info(f"  - classification_report.txt")
+            llm_summary = lasso_result['summary']
+            std_summary = standard_lasso_result['summary']
+            
+            logger.info("=" * 60)
+            logger.info("COMPARISON: LLM-LASSO vs STANDARD LASSO")
+            logger.info("=" * 60)
+            logger.info("")
+            logger.info(f"{'Metric':<25} {'LLM-Lasso':<15} {'Standard':<15} {'Difference':<15}")
+            logger.info("-" * 70)
+            
+            metrics_to_compare = [
+                ('AUROC', 'auroc'),
+                ('Accuracy', 'accuracy'),
+                ('Balanced Accuracy', 'balanced_accuracy'),
+                ('Sensitivity', 'sensitivity'),
+                ('Specificity', 'specificity'),
+                ('F1 Score', 'f1_score'),
+                ('MCC', 'mcc'),
+            ]
+            
+            for name, key in metrics_to_compare:
+                llm_val = llm_summary.get(key, 0)
+                std_val = std_summary.get(key, 0)
+                diff = llm_val - std_val
+                diff_str = f"+{diff:.4f}" if diff > 0 else f"{diff:.4f}"
+                winner = "LLM" if diff > 0.001 else ("STD" if diff < -0.001 else "TIE")
+                logger.info(f"{name:<25} {llm_val:.4f}         {std_val:.4f}         {diff_str} ({winner})")
+            
+            logger.info("-" * 70)
+            logger.info("")
+            
+            # Summarize which method performed better
+            llm_wins = sum(1 for _, key in metrics_to_compare 
+                          if llm_summary.get(key, 0) > std_summary.get(key, 0) + 0.001)
+            std_wins = sum(1 for _, key in metrics_to_compare 
+                          if std_summary.get(key, 0) > llm_summary.get(key, 0) + 0.001)
+            
+            if llm_wins > std_wins:
+                logger.info(f"WINNER: LLM-Lasso ({llm_wins}/{len(metrics_to_compare)} metrics)")
+            elif std_wins > llm_wins:
+                logger.info(f"WINNER: Standard Lasso ({std_wins}/{len(metrics_to_compare)} metrics)")
+            else:
+                logger.info(f"RESULT: TIE (both methods perform similarly)")
+            
+            logger.info("")
+            logger.info("Comparison plots saved to:")
+            logger.info(f"  - {os.path.join(comparison_dir, 'metrics_comparison_bar.png')}")
+            logger.info(f"  - {os.path.join(comparison_dir, 'roc_curves_comparison.png')}")
+            logger.info(f"  - {os.path.join(comparison_dir, 'confusion_matrices_comparison.png')}")
+            logger.info(f"  - {os.path.join(comparison_dir, 'comparison_dashboard.png')}")
         else:
-            logger.info(f"Best model test error: {lasso_result['summary']['test_error']:.4f}")
-            logger.info(f"Best model AUROC: {lasso_result['summary']['auroc']}")
-            logger.info(f"Features selected: {lasso_result['summary']['n_features']}/{lasso_result['summary']['total_features']}")
+            logger.info(f"LLM-Lasso - Best model test error: {lasso_result['summary']['test_error']:.4f}")
+            logger.info(f"LLM-Lasso - Best model AUROC: {lasso_result['summary']['auroc']}")
+            logger.info(f"LLM-Lasso - Features selected: {lasso_result['summary']['n_features']}/{lasso_result['summary']['total_features']}")
+            logger.info("")
+            logger.info(f"Standard Lasso - Best model test error: {standard_lasso_result['summary'].get('test_error', 'N/A')}")
+            logger.info(f"Standard Lasso - Best model AUROC: {standard_lasso_result['summary'].get('auroc', 'N/A')}")
         
         return 0
         

@@ -58,7 +58,5 @@ omim_vectorstore/
 *.chroma/
 
 # deep pdf folder
-./deep_pdfs/
-**/deep_pdfs
 deep_pdfs/
-**./deep_pdfs/**
+**/deep_pdfs/**
