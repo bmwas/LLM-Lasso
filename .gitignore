@@ -56,3 +56,6 @@ Thumbs.db
 pdf_vectorstore/
 omim_vectorstore/
 *.chroma/
+
+# deep pdf folder
+./deep_pdfs/

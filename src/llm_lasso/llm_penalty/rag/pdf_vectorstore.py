@@ -96,6 +96,119 @@ def _log_collection_info(collection, label: str = "Collection") -> Dict[str, Any
     return info
 
 
+def check_document_duplicates(
+    documents: List[Document],
+    vectorstore: Chroma,
+    similarity_threshold: float = 0.95,
+    max_results: int = 5
+) -> tuple:
+    """
+    Check for duplicate documents using similarity search.
+
+    Args:
+        documents: List of Document objects to check for duplicates
+        vectorstore: Chroma vectorstore to search against
+        similarity_threshold: Minimum similarity score (0-1) to consider as duplicate
+        max_results: Maximum number of similar documents to retrieve per query
+
+    Returns:
+        Tuple of (non_duplicate_docs, duplicate_info) where:
+        - non_duplicate_docs: List of documents that are not duplicates
+        - duplicate_info: Dict with stats about duplicates found
+    """
+    operation_id = hashlib.md5(f"dup_check_{len(documents)}{time.time()}".encode()).hexdigest()[:8]
+    logger.info(f"[Dup:{operation_id}] ===== CHECKING DOCUMENT DUPLICATES =====")
+    logger.info(f"[Dup:{operation_id}] Checking {len(documents)} documents for duplicates")
+    logger.debug(f"[Dup:{operation_id}] Similarity threshold: {similarity_threshold}")
+    logger.debug(f"[Dup:{operation_id}] Max results per query: {max_results}")
+
+    non_duplicates = []
+    duplicate_stats = {
+        "total_checked": len(documents),
+        "duplicates_found": 0,
+        "duplicates_skipped": 0,
+        "duplicates_by_source": {},
+        "duplicate_details": []
+    }
+
+    check_start = time.time()
+
+    for i, doc in enumerate(documents):
+        if i % 50 == 0:  # Progress logging
+            logger.info(f"[Dup:{operation_id}] Progress: {i}/{len(documents)} documents checked")
+
+        doc_content = doc.page_content[:1000]  # Use first 1000 chars for similarity check
+        doc_source = doc.metadata.get('filename', 'Unknown')
+        doc_page = doc.metadata.get('page', 'Unknown')
+
+        try:
+            # Search for similar documents
+            similar_docs = vectorstore.similarity_search_with_score(
+                query=doc_content,
+                k=max_results
+            )
+
+            # Check if any similar documents exceed threshold
+            is_duplicate = False
+            duplicate_sources = []
+
+            for similar_doc, score in similar_docs:
+                if score >= similarity_threshold:
+                    similar_source = similar_doc.metadata.get('filename', 'Unknown')
+                    similar_page = similar_doc.metadata.get('page', 'Unknown')
+
+                    duplicate_sources.append({
+                        "source": similar_source,
+                        "page": similar_page,
+                        "similarity_score": score
+                    })
+                    is_duplicate = True
+
+            if is_duplicate:
+                duplicate_stats["duplicates_found"] += 1
+                duplicate_stats["duplicates_skipped"] += 1
+
+                # Track by source
+                if doc_source not in duplicate_stats["duplicates_by_source"]:
+                    duplicate_stats["duplicates_by_source"][doc_source] = 0
+                duplicate_stats["duplicates_by_source"][doc_source] += 1
+
+                # Store duplicate details
+                duplicate_stats["duplicate_details"].append({
+                    "skipped_source": doc_source,
+                    "skipped_page": doc_page,
+                    "content_preview": doc_content[:200],
+                    "similar_documents": duplicate_sources
+                })
+
+                logger.debug(f"[Dup:{operation_id}] DUPLICATE FOUND: {doc_source} page {doc_page} "
+                           f"(similarity: {max([d['similarity_score'] for d in duplicate_sources]):.3f})")
+            else:
+                non_duplicates.append(doc)
+                logger.debug(f"[Dup:{operation_id}] UNIQUE: {doc_source} page {doc_page}")
+
+        except Exception as e:
+            logger.warning(f"[Dup:{operation_id}] Error checking document {i} ({doc_source}): {e}")
+            # On error, include the document (fail-safe approach)
+            non_duplicates.append(doc)
+
+    check_time = time.time() - check_start
+    duplicate_stats["check_time_seconds"] = check_time
+
+    logger.info(f"[Dup:{operation_id}] ===== DUPLICATE CHECK COMPLETE =====")
+    logger.info(f"[Dup:{operation_id}] Total checked: {duplicate_stats['total_checked']}")
+    logger.info(f"[Dup:{operation_id}] Duplicates found: {duplicate_stats['duplicates_found']}")
+    logger.info(f"[Dup:{operation_id}] Documents kept: {len(non_duplicates)}")
+    logger.info(f"[Dup:{operation_id}] Check time: {check_time:.2f}s")
+
+    if duplicate_stats["duplicates_by_source"]:
+        logger.info(f"[Dup:{operation_id}] Duplicates by source:")
+        for source, count in duplicate_stats["duplicates_by_source"].items():
+            logger.info(f"  - {source}: {count} duplicates")
+
+    return non_duplicates, duplicate_stats
+
+
 def create_pdf_vectorstore(
     pdf_directory: str,
     persist_directory: str,
@@ -105,24 +218,32 @@ def create_pdf_vectorstore(
     embedding_model: Optional[Embeddings] = None,
     collection_name: str = "pdf_documents",
     filter_references: bool = True,
-    clean_existing: bool = True
+    clean_existing: bool = True,
+    check_duplicates: bool = False,
+    duplicate_threshold: float = 0.95
 ) -> Chroma:
     """
     Create a ChromaDB vectorstore from PDF documents in a directory.
-    
+
     Args:
         pdf_directory: Path to directory containing PDF files.
         persist_directory: Path to directory where ChromaDB will be persisted.
         chunk_size: Maximum size of each text chunk.
         chunk_overlap: Overlap between consecutive chunks.
         page_chunks: If True, extract text page by page before chunking.
-        embedding_model: LangChain Embeddings model (OpenAI, vLLM, etc.). 
+        embedding_model: LangChain Embeddings model (OpenAI, vLLM, etc.).
                         If None, creates default OpenAI embeddings.
         collection_name: Name for the ChromaDB collection.
         filter_references: If True, filter out reference/bibliography sections from indexing.
         clean_existing: If True (default), delete any existing vectorstore at persist_directory
                        before creating a new one. This ensures a clean index.
-    
+        check_duplicates: If True, check for duplicate documents using similarity search
+                         before indexing. Documents with similarity >= duplicate_threshold
+                         will be skipped.
+        duplicate_threshold: Similarity threshold (0.0-1.0) for duplicate detection.
+                           Higher values are more conservative (fewer false positives but
+                           more false negatives). Default 0.95.
+
     Returns:
         Chroma vectorstore populated with PDF document chunks.
     """
@@ -270,7 +391,7 @@ def create_pdf_vectorstore(
     # Convert to LangChain Document objects
     logger.info(f"[Op:{operation_id}] Converting to LangChain Documents...")
     print("Converting to LangChain Documents...")
-    
+
     convert_start = time.time()
     documents_wrapped = [
         Document(
@@ -281,6 +402,44 @@ def create_pdf_vectorstore(
     ]
     convert_time = time.time() - convert_start
     logger.debug(f"[Op:{operation_id}] Conversion completed in {convert_time:.3f}s")
+
+    # Check for duplicates if requested
+    duplicate_stats = None
+    if check_duplicates:
+        logger.info(f"[Op:{operation_id}] Checking for duplicate documents...")
+        print("Checking for duplicate documents...")
+
+        # For duplicate checking, we need an existing vectorstore to search against
+        # Since we're creating a new one, we'll check against a temporary empty vectorstore
+        # and then filter duplicates. For append mode, we'd check against existing data.
+        # Note: This is a simplified approach - in production you might want to check
+        # against existing vectorstores when appending.
+
+        if not clean_existing and os.path.exists(persist_directory):
+            # Load existing vectorstore for duplicate checking
+            logger.info(f"[Op:{operation_id}] Loading existing vectorstore for duplicate check...")
+            try:
+                temp_vectorstore = Chroma(
+                    persist_directory=persist_directory,
+                    embedding_function=embedding_model,
+                    collection_name=collection_name
+                )
+                documents_wrapped, duplicate_stats = check_document_duplicates(
+                    documents_wrapped,
+                    temp_vectorstore,
+                    similarity_threshold=duplicate_threshold
+                )
+                logger.info(f"[Op:{operation_id}] Duplicate check completed against existing vectorstore")
+            except Exception as e:
+                logger.warning(f"[Op:{operation_id}] Failed to load existing vectorstore for duplicate check: {e}")
+                logger.warning(f"[Op:{operation_id}] Continuing without duplicate detection")
+        else:
+            logger.info(f"[Op:{operation_id}] Creating new vectorstore - no existing data to check duplicates against")
+            logger.info(f"[Op:{operation_id}] Duplicate detection will be skipped for initial indexing")
+
+    elif not clean_existing and os.path.exists(persist_directory):
+        logger.info(f"[Op:{operation_id}] Appending to existing vectorstore - consider enabling duplicate detection")
+        logger.warning(f"[Op:{operation_id}] Duplicate detection is disabled but appending to existing vectorstore")
     
     # Ensure persist directory exists
     logger.debug(f"[Op:{operation_id}] Ensuring persist directory exists: {persist_directory}")
@@ -334,7 +493,19 @@ def create_pdf_vectorstore(
     logger.info(f"[Op:{operation_id}] Documents indexed: {len(documents_wrapped)}")
     logger.info(f"[Op:{operation_id}] Collection: {collection_name}")
     logger.info(f"[Op:{operation_id}] Persist path: {persist_directory}")
-    
+
+    # Log duplicate statistics if available
+    if duplicate_stats:
+        logger.info(f"[Op:{operation_id}] Duplicate detection results:")
+        logger.info(f"  - Total documents checked: {duplicate_stats['total_checked']}")
+        logger.info(f"  - Duplicates found: {duplicate_stats['duplicates_found']}")
+        logger.info(f"  - Duplicates skipped: {duplicate_stats['duplicates_skipped']}")
+        logger.info(f"  - Documents indexed: {len(documents_wrapped)}")
+        if duplicate_stats['duplicates_by_source']:
+            logger.info(f"  - Duplicates by source:")
+            for source, count in duplicate_stats['duplicates_by_source'].items():
+                logger.info(f"    * {source}: {count} duplicates")
+
     print(f"Successfully created vectorstore with {len(documents_wrapped)} document chunks")
     return vectorstore
 

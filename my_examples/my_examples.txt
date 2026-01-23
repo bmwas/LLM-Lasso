@@ -1,6 +1,6 @@
 ## These are my examples -
  
-Vector indexing -  python scripts/index_pdf_vectorstore.py  --pdf-directory /path/to/your/pdfs --persist-directory ./pdf_vectorstore  --embedding-backend vllm --log-level INFO
+Vector indexing -  python scripts/index_pdf_vectorstore.py  --pdf-directory /path/to/your/pdfs --persist-directory ./pdf_vectorstore  --embedding-backend vllm --check-duplicates --log-level INFO
 
 Example 1: Using OpenAI Backend (with Grid Search)
 

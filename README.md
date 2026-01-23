@@ -1581,7 +1581,129 @@ Make sure the vLLM embedding service is running:
   docker compose --env-file .env -f opensource_llms/docker-compose.yml up
 ```
 
-#### 5. **Migration from Old Workflow**
+#### 5. **Duplicate Document Detection**
+
+**Recent Update (2025):** The PDF vectorstore indexing now includes **automatic duplicate document detection** to prevent indexing identical or near-identical documents, ensuring clean and efficient vectorstores.
+
+##### How It Works
+
+The duplicate detection system uses **cosine similarity** to identify documents that are substantially identical:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    NEW DOCUMENT CHUNK                        │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  1. PRE-INDEXING SIMILARITY CHECK                            │
+│     - Compares new chunk against ALL existing chunks         │
+│     - Uses first 1000 characters for efficient comparison    │
+│     - Cosine similarity threshold: configurable (default 0.95)
+│     - Only runs when appending to existing vectorstores      │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  2. DECISION LOGIC                                           │
+│     ├── SIMILARITY ≥ THRESHOLD → SKIP (duplicate)            │
+│     └── SIMILARITY < THRESHOLD → INDEX (unique)              │
+└─────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│  3. COMPREHENSIVE LOGGING                                    │
+│     - Total documents checked                                │
+│     - Duplicates found and skipped                           │
+│     - Documents indexed vs duplicates                        │
+│     - Breakdown by source file                               │
+└─────────────────────────────────────────────────────────────┘
+```
+
+##### Key Features
+
+- **Conservative Threshold**: Default 0.95 similarity catches most duplicates while allowing normal variations
+- **Efficient Comparison**: Uses first 1000 characters to balance speed and accuracy
+- **Append-Only Mode**: Only active when appending to existing vectorstores (not during initial creation)
+- **Detailed Logging**: Tracks what was indexed vs skipped with source attribution
+- **Configurable Sensitivity**: Adjust threshold based on your needs (higher = fewer false positives, lower = more aggressive detection)
+
+##### Usage
+
+**Enable duplicate detection when appending to existing indexes:**
+
+```bash
+# Index with duplicate detection enabled
+python scripts/index_pdf_vectorstore.py \
+    --pdf-directory ./sample_pdfs \
+    --persist-directory ./pdf_vectorstore \
+    --embedding-backend vllm \
+    --no-clean \
+    --check-duplicates \
+    --duplicate-threshold 0.95
+
+# Use stricter threshold (more conservative)
+python scripts/index_pdf_vectorstore.py \
+    --pdf-directory ./sample_pdfs \
+    --persist-directory ./pdf_vectorstore \
+    --embedding-backend vllm \
+    --no-clean \
+    --check-duplicates \
+    --duplicate-threshold 0.98
+```
+
+##### Command Line Arguments
+
+| Argument | Description | Default | When to Use |
+|----------|-------------|---------|-------------|
+| `--check-duplicates` | Enable duplicate document detection using similarity search | `False` | When appending to existing vectorstores |
+| `--duplicate-threshold` | Similarity threshold (0.0-1.0) for duplicate detection. Higher values are more conservative | `0.95` | Adjust based on document similarity needs |
+
+##### Example Output
+
+```
+[Dup:abc1234] ===== CHECKING DOCUMENT DUPLICATES =====
+[Dup:abc1234] Checking 150 documents for duplicates
+[Dup:abc1234] Similarity threshold: 0.95
+[Dup:abc1234] Progress: 150/150 documents checked
+
+[Dup:abc1234] ===== DUPLICATE CHECK COMPLETE =====
+[Dup:abc1234] Total checked: 150
+[Dup:abc1234] Duplicates found: 23
+[Dup:abc1234] Documents kept: 127
+[Dup:abc1234] Check time: 45.2s
+
+[Dup:abc1234] Duplicate detection results:
+  - Total documents checked: 150
+  - Duplicates found: 23
+  - Duplicates skipped: 23
+  - Documents indexed: 127
+  - Duplicates by source:
+    * paper1.pdf: 8 duplicates
+    * paper2.pdf: 15 duplicates
+```
+
+##### When to Use Duplicate Detection
+
+**✅ Recommended scenarios:**
+- Appending new PDFs to existing vectorstores
+- Re-indexing the same PDF collection multiple times
+- Processing PDFs with overlapping content (e.g., review articles citing original papers)
+
+**❌ Not needed for:**
+- Initial vectorstore creation (no existing data to check against)
+- Completely different PDF collections
+- One-time indexing operations
+
+##### Threshold Selection Guide
+
+| Threshold | Behavior | Use Case |
+|-----------|----------|----------|
+| `0.90` | Aggressive - catches most duplicates, some false positives | High-quality, carefully curated PDFs |
+| `0.95` | Balanced - good default, conservative approach | General use, mixed quality PDFs |
+| `0.98` | Very conservative - few false positives, may miss some duplicates | Noisy PDFs, strict requirements |
+
+#### 6. **Migration from Old Workflow**
 
 **Old Method (deprecated):**
 ```bash

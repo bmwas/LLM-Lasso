@@ -184,6 +184,15 @@ Examples:
         --chunk-size 1500 \\
         --chunk-overlap 300 \\
         --embedding-backend vllm
+
+    # Index with duplicate detection (appends to existing vectorstore)
+    python scripts/index_pdf_vectorstore.py \\
+        --pdf-directory ./sample_pdfs \\
+        --persist-directory ./my_vectorstore \\
+        --no-clean \\
+        --check-duplicates \\
+        --duplicate-threshold 0.9 \\
+        --embedding-backend vllm
         """
     )
     
@@ -264,6 +273,20 @@ Examples:
         default=None,
         help="Optional log file path"
     )
+
+    parser.add_argument(
+        "--check-duplicates",
+        action="store_true",
+        help="Enable duplicate document detection using similarity search"
+    )
+
+    parser.add_argument(
+        "--duplicate-threshold",
+        type=float,
+        default=0.95,
+        help="Similarity threshold (0.0-1.0) for duplicate detection. "
+             "Higher values are more conservative (default: 0.95)"
+    )
     
     args = parser.parse_args()
     
@@ -318,6 +341,9 @@ Examples:
     logger.info(f"  Page Chunks: {not args.no_page_chunks}")
     logger.info(f"  Filter References: {not args.no_filter_references}")
     logger.info(f"  Clean Existing: {not args.no_clean}")
+    logger.info(f"  Check Duplicates: {args.check_duplicates}")
+    if args.check_duplicates:
+        logger.info(f"  Duplicate Threshold: {args.duplicate_threshold}")
     logger.info("")
     
     # Get embedding model
@@ -349,7 +375,9 @@ Examples:
             embedding_model=embeddings,
             collection_name=args.collection_name,
             filter_references=not args.no_filter_references,
-            clean_existing=not args.no_clean
+            clean_existing=not args.no_clean,
+            check_duplicates=args.check_duplicates,
+            duplicate_threshold=args.duplicate_threshold
         )
         
         elapsed_time = time.time() - start_time
