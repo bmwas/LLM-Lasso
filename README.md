@@ -150,6 +150,14 @@ cd ..
 > cd adelie-fork && pip install -e .
 > ```
 
+> **Committing changes to adelie-fork (submodule):**
+> 
+> If you modify code inside `adelie-fork`, the parent repo does not auto-stage those changes. To record them:
+> 1. Commit inside the submodule: `cd adelie-fork`, then `git add .` and `git commit -m "your message"`.
+> 2. From the LLM-Lasso root, stage and commit the updated submodule pointer: `git add adelie-fork` then `git commit -m "your message"`.
+> 
+> Without step 2, you will see "modified content" in adelie-fork and "no changes added to commit" when committing in the parent repo.
+
 #### Step 5: Install Additional Python Dependencies
 
 ```bash

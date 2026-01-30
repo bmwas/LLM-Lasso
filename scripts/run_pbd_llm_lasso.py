@@ -2974,6 +2974,18 @@ def run_lasso_with_loo(
         X_train_scaled = scale_cols(X_train)
         X_test_scaled = scale_cols(X_test, center=train_center, scale=train_scale)
         
+        # Ensure no NaN/Inf before SMOTE (e.g. from constant columns in scale_cols)
+        X_train_scaled = pd.DataFrame(
+            np.nan_to_num(X_train_scaled.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0),
+            columns=X_train_scaled.columns,
+            index=X_train_scaled.index
+        )
+        X_test_scaled = pd.DataFrame(
+            np.nan_to_num(X_test_scaled.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0),
+            columns=X_test_scaled.columns,
+            index=X_test_scaled.index
+        )
+        
         # Apply SMOTE to balance training data (if enabled)
         if use_smote:
             try:
@@ -3139,6 +3151,13 @@ def run_lasso_with_loo(
     logger.info("Training final model on all data for stable coefficients...")
     try:
         X_all_scaled = scale_cols(X)
+        
+        # Ensure no NaN/Inf before SMOTE (e.g. from constant columns in scale_cols)
+        X_all_scaled = pd.DataFrame(
+            np.nan_to_num(X_all_scaled.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0),
+            columns=X_all_scaled.columns,
+            index=X_all_scaled.index
+        )
         
         # Apply SMOTE if enabled for final model
         if use_smote:
@@ -3475,6 +3494,18 @@ def run_standard_lasso_with_loo(
         X_train_scaled = scale_cols(X_train)
         X_test_scaled = scale_cols(X_test, center=train_center, scale=train_scale)
         
+        # Ensure no NaN/Inf before SMOTE (e.g. from constant columns in scale_cols)
+        X_train_scaled = pd.DataFrame(
+            np.nan_to_num(X_train_scaled.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0),
+            columns=X_train_scaled.columns,
+            index=X_train_scaled.index
+        )
+        X_test_scaled = pd.DataFrame(
+            np.nan_to_num(X_test_scaled.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0),
+            columns=X_test_scaled.columns,
+            index=X_test_scaled.index
+        )
+        
         # Apply SMOTE to balance training data (if enabled)
         if use_smote:
             try:
@@ -3635,6 +3666,13 @@ def run_standard_lasso_with_loo(
     logger.info("Training final Standard Lasso model on all data...")
     try:
         X_all_scaled = scale_cols(X)
+        
+        # Ensure no NaN/Inf before SMOTE (e.g. from constant columns in scale_cols)
+        X_all_scaled = pd.DataFrame(
+            np.nan_to_num(X_all_scaled.to_numpy(), nan=0.0, posinf=0.0, neginf=0.0),
+            columns=X_all_scaled.columns,
+            index=X_all_scaled.index
+        )
         
         # Apply SMOTE if enabled for final model
         if use_smote:
