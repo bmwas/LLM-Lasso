@@ -99,12 +99,68 @@ def chunk_by_gene(json_file, output_file, chunk_size=1000, chunk_overlap=200):
     print(f"Chunked data saved to {output_file}")
 
 
+def _normalize_short_lines(content: str, max_short_line_chars: int) -> str:
+    """
+    Merge short lines (e.g. section headers) with the following non-empty line so they
+    are not split into standalone chunks. Replaces the run of newlines between a short
+    line and the next non-empty line with a single space.
+
+    Consecutive short lines are merged into the next long line (e.g. "A\\nB\\nLong"
+    becomes "A B Long" when A and B are short).
+
+    Args:
+        content: Raw text (e.g. markdown from a PDF page).
+        max_short_line_chars: Lines with fewer than this many characters (after strip)
+                             are considered short and merged with the next non-empty line.
+
+    Returns:
+        Text with short lines merged into the following paragraph.
+    """
+    if max_short_line_chars <= 0:
+        return content
+    lines = content.split("\n")
+    output_lines: List[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        if not stripped:
+            output_lines.append("")
+            i += 1
+        elif len(stripped) >= max_short_line_chars:
+            output_lines.append(stripped)
+            i += 1
+        else:
+            # Short line: merge with following non-empty lines until we hit a long one or end
+            buffer = stripped
+            j = i + 1
+            while j < len(lines):
+                next_stripped = lines[j].strip()
+                if not next_stripped:
+                    j += 1
+                    continue
+                if len(next_stripped) >= max_short_line_chars:
+                    output_lines.append(buffer + " " + next_stripped)
+                    j += 1
+                    break
+                buffer = buffer + " " + next_stripped
+                j += 1
+            else:
+                output_lines.append(buffer)
+            i = j
+    return "\n".join(output_lines)
+
+
 def chunk_pdf_documents(
     documents: list[dict],
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
     output_file: Optional[str] = None,
-    filter_references: bool = True
+    filter_references: bool = True,
+    min_chunk_length: int = 0,
+    min_chunk_words: Optional[int] = None,
+    normalize_newlines: bool = False,
+    max_short_line_chars: int = 80
 ) -> Tuple[list[dict], Dict[str, Any]]:
     """
     Chunk PDF documents extracted by pdf_RAG_process into smaller pieces for vectorstore ingestion.
@@ -116,6 +172,15 @@ def chunk_pdf_documents(
         chunk_overlap: Overlap between consecutive chunks.
         output_file: Optional path to save chunked output as JSON lines file.
         filter_references: If True, filter out chunks that appear to be reference content.
+        min_chunk_length: Minimum character length for a chunk to be indexed. Chunks shorter
+                          than this (e.g. section headers like "SUICIDAL BEHAVIOR") are skipped
+                          to reduce retrieval noise. Use 0 to disable. Default 0 for backward compat.
+        min_chunk_words: Minimum word count for a chunk. If set, chunks with fewer words are
+                         skipped. Use None to disable. Useful to drop 1–2 word headers.
+        normalize_newlines: If True, merge short lines (e.g. headers) with the next paragraph so
+                           they are not standalone chunks; preserves subtitles while reducing noise.
+        max_short_line_chars: Lines shorter than this are merged with the next non-empty line
+                              when normalize_newlines is True.
     
     Returns:
         Tuple of:
@@ -155,7 +220,9 @@ def chunk_pdf_documents(
         'chunks_filtered': 0,
         'chunks_kept': 0,
         'bytes_filtered': 0,
-        'filtered_chunks': []
+        'filtered_chunks': [],
+        'chunks_filtered_short': 0,
+        'filtered_short_chunks': []
     }
     
     for doc in tqdm(documents, desc="Chunking PDF documents"):
@@ -165,6 +232,9 @@ def chunk_pdf_documents(
         if not content.strip():
             continue
         
+        if normalize_newlines and max_short_line_chars > 0:
+            content = _normalize_short_lines(content, max_short_line_chars)
+        
         # Split the content into chunks
         text_chunks = text_splitter.split_text(content)
         
@@ -173,6 +243,39 @@ def chunk_pdf_documents(
                 continue
             
             filter_stats['total_chunks_created'] += 1
+            
+            # Skip chunks that are too short (e.g. section headers, noise)
+            chunk_stripped = chunk.strip()
+            if min_chunk_length > 0 and len(chunk_stripped) < min_chunk_length:
+                filter_stats['chunks_filtered_short'] += 1
+                filter_stats['filtered_short_chunks'].append({
+                    'source': metadata.get('filename', 'unknown'),
+                    'page': metadata.get('page', 'unknown'),
+                    'chunk_index': chunk_idx,
+                    'reason': f'length {len(chunk_stripped)} < min_chunk_length {min_chunk_length}',
+                    'content_preview': chunk_stripped[:80]
+                })
+                logger.debug(
+                    f"Filtered short chunk {chunk_idx} from {metadata.get('filename', 'unknown')} "
+                    f"page {metadata.get('page', '?')}: {len(chunk_stripped)} chars"
+                )
+                continue
+            if min_chunk_words is not None and min_chunk_words > 0:
+                word_count = len(chunk_stripped.split())
+                if word_count < min_chunk_words:
+                    filter_stats['chunks_filtered_short'] += 1
+                    filter_stats['filtered_short_chunks'].append({
+                        'source': metadata.get('filename', 'unknown'),
+                        'page': metadata.get('page', 'unknown'),
+                        'chunk_index': chunk_idx,
+                        'reason': f'words {word_count} < min_chunk_words {min_chunk_words}',
+                        'content_preview': chunk_stripped[:80]
+                    })
+                    logger.debug(
+                        f"Filtered short chunk {chunk_idx} from {metadata.get('filename', 'unknown')} "
+                        f"page {metadata.get('page', '?')}: {word_count} words"
+                    )
+                    continue
             
             # Check if this chunk is reference content
             if filter_references and is_reference_chunk is not None:
@@ -215,6 +318,11 @@ def chunk_pdf_documents(
         print(
             f"Chunk-level reference filtering: {filter_stats['chunks_filtered']}/{filter_stats['total_chunks_created']} "
             f"chunks filtered ({100*filter_stats['chunks_filtered']/max(filter_stats['total_chunks_created'],1):.1f}%)"
+        )
+    if filter_stats.get('chunks_filtered_short', 0) > 0:
+        print(
+            f"Short-chunk filtering: {filter_stats['chunks_filtered_short']}/{filter_stats['total_chunks_created']} "
+            f"chunks skipped (below min length/words)"
         )
     
     # Optionally save to file

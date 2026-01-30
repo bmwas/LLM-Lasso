@@ -4722,9 +4722,20 @@ def main():
             logger.info(f"  - {os.path.join(comparison_dir, 'confusion_matrices_comparison.png')}")
             logger.info(f"  - {os.path.join(comparison_dir, 'comparison_dashboard.png')}")
         else:
-            logger.info(f"LLM-Lasso - Best model test error: {lasso_result['summary']['test_error']:.4f}")
-            logger.info(f"LLM-Lasso - Best model AUROC: {lasso_result['summary']['auroc']}")
-            logger.info(f"LLM-Lasso - Features selected: {lasso_result['summary']['n_features']}/{lasso_result['summary']['total_features']}")
+            summ = lasso_result["summary"]
+            test_err = summ.get("test_error")
+            auroc_val = summ.get("auroc")
+            n_feat = summ.get("n_features")
+            total_feat = summ.get("total_features")
+            logger.info(
+                f"LLM-Lasso - Best model test error: {test_err:.4f}" if test_err is not None else "LLM-Lasso - Best model test error: N/A (lasso skipped)"
+            )
+            logger.info(
+                f"LLM-Lasso - Best model AUROC: {auroc_val}" if auroc_val is not None else "LLM-Lasso - Best model AUROC: N/A (lasso skipped)"
+            )
+            logger.info(
+                f"LLM-Lasso - Features selected: {n_feat}/{total_feat}" if n_feat is not None and total_feat is not None else "LLM-Lasso - Features selected: N/A (lasso skipped)"
+            )
             if standard_lasso_result is not None:
                 logger.info("")
                 logger.info(f"Standard Lasso - Best model test error: {standard_lasso_result['summary'].get('test_error', 'N/A')}")

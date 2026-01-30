@@ -220,7 +220,11 @@ def create_pdf_vectorstore(
     filter_references: bool = True,
     clean_existing: bool = True,
     check_duplicates: bool = False,
-    duplicate_threshold: float = 0.95
+    duplicate_threshold: float = 0.95,
+    min_chunk_length: int = 0,
+    min_chunk_words: Optional[int] = None,
+    normalize_newlines: bool = False,
+    max_short_line_chars: int = 80
 ) -> Chroma:
     """
     Create a ChromaDB vectorstore from PDF documents in a directory.
@@ -243,6 +247,15 @@ def create_pdf_vectorstore(
         duplicate_threshold: Similarity threshold (0.0-1.0) for duplicate detection.
                            Higher values are more conservative (fewer false positives but
                            more false negatives). Default 0.95.
+        min_chunk_length: Minimum character length for a chunk to be indexed. Chunks shorter
+                          than this (e.g. section headers) are skipped to reduce retrieval noise.
+                          Use 0 to disable. Default 0.
+        min_chunk_words: Minimum word count for a chunk. If set, chunks with fewer words are
+                         skipped. Use None to disable.
+        normalize_newlines: If True, merge short lines (e.g. headers) with the next paragraph so
+                           they are not standalone chunks; preserves subtitles while reducing noise.
+        max_short_line_chars: Lines shorter than this are merged with the next non-empty line
+                              when normalize_newlines is True.
 
     Returns:
         Chroma vectorstore populated with PDF document chunks.
@@ -261,6 +274,10 @@ def create_pdf_vectorstore(
     logger.debug(f"  collection_name: {collection_name}")
     logger.debug(f"  filter_references: {filter_references}")
     logger.debug(f"  clean_existing: {clean_existing}")
+    logger.debug(f"  min_chunk_length: {min_chunk_length}")
+    logger.debug(f"  min_chunk_words: {min_chunk_words}")
+    logger.debug(f"  normalize_newlines: {normalize_newlines}")
+    logger.debug(f"  max_short_line_chars: {max_short_line_chars}")
     logger.debug(f"  embedding_model provided: {embedding_model is not None}")
     
     total_start = time.time()
@@ -349,7 +366,11 @@ def create_pdf_vectorstore(
         raw_documents,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
-        filter_references=filter_references
+        filter_references=filter_references,
+        min_chunk_length=min_chunk_length,
+        min_chunk_words=min_chunk_words,
+        normalize_newlines=normalize_newlines,
+        max_short_line_chars=max_short_line_chars
     )
     chunk_time = time.time() - chunk_start
     
@@ -362,6 +383,12 @@ def create_pdf_vectorstore(
             f"[Op:{operation_id}] Chunk-level reference filtering: "
             f"{chunk_filter_stats['chunks_filtered']}/{chunk_filter_stats['total_chunks_created']} chunks filtered "
             f"({100*chunk_filter_stats['chunks_filtered']/max(chunk_filter_stats['total_chunks_created'],1):.1f}%)"
+        )
+    if chunk_filter_stats.get('chunks_filtered_short', 0) > 0:
+        logger.info(
+            f"[Op:{operation_id}] Short-chunk filtering: "
+            f"{chunk_filter_stats['chunks_filtered_short']}/{chunk_filter_stats['total_chunks_created']} chunks skipped "
+            f"(min_chunk_length={min_chunk_length}, min_chunk_words={min_chunk_words})"
         )
     
     if not chunked_documents:
@@ -622,7 +649,11 @@ def get_or_create_pdf_vectorstore(
     embedding_model: Optional[Embeddings] = None,
     collection_name: str = "pdf_documents",
     force_recreate: bool = False,
-    filter_references: bool = True
+    filter_references: bool = True,
+    min_chunk_length: int = 0,
+    min_chunk_words: Optional[int] = None,
+    normalize_newlines: bool = False,
+    max_short_line_chars: int = 80
 ) -> Chroma:
     """
     Get existing vectorstore or create a new one if it doesn't exist.
@@ -707,7 +738,11 @@ def get_or_create_pdf_vectorstore(
         page_chunks=page_chunks,
         embedding_model=embedding_model,
         collection_name=collection_name,
-        filter_references=filter_references
+        filter_references=filter_references,
+        min_chunk_length=min_chunk_length,
+        min_chunk_words=min_chunk_words,
+        normalize_newlines=normalize_newlines,
+        max_short_line_chars=max_short_line_chars
     )
 
 
@@ -716,7 +751,11 @@ def add_pdfs_to_vectorstore(
     pdf_paths: list,
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
-    page_chunks: bool = True
+    page_chunks: bool = True,
+    min_chunk_length: int = 0,
+    min_chunk_words: Optional[int] = None,
+    normalize_newlines: bool = False,
+    max_short_line_chars: int = 80
 ) -> Chroma:
     """
     Add new PDF documents to an existing vectorstore.
@@ -769,10 +808,14 @@ def add_pdfs_to_vectorstore(
     # Chunk the documents
     logger.info(f"[Op:{operation_id}] Chunking documents...")
     chunk_start = time.time()
-    chunked_documents = chunk_pdf_documents(
+    chunked_documents, _ = chunk_pdf_documents(
         all_documents,
         chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap
+        chunk_overlap=chunk_overlap,
+        min_chunk_length=min_chunk_length,
+        min_chunk_words=min_chunk_words,
+        normalize_newlines=normalize_newlines,
+        max_short_line_chars=max_short_line_chars
     )
     chunk_time = time.time() - chunk_start
     logger.info(f"[Op:{operation_id}] Created {len(chunked_documents)} chunks in {chunk_time:.2f}s")

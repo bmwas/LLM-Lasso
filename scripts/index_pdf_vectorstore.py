@@ -177,12 +177,13 @@ Examples:
         --pdf-directory ./sample_pdfs \\
         --embedding-backend vllm
 
-    # Force re-index with specific chunk settings
+    # Force re-index with specific chunk settings (skip chunks shorter than 50 chars)
     python scripts/index_pdf_vectorstore.py \\
         --pdf-directory ./sample_pdfs \\
         --persist-directory ./my_vectorstore \\
         --chunk-size 1500 \\
         --chunk-overlap 300 \\
+        --min-chunk-length 50 \\
         --embedding-backend vllm
 
     # Index with duplicate detection (appends to existing vectorstore)
@@ -239,6 +240,40 @@ Examples:
         type=int,
         default=200,
         help="Overlap between consecutive chunks in characters (default: 200)"
+    )
+    
+    parser.add_argument(
+        "--min-chunk-length",
+        type=int,
+        default=50,
+        help="Minimum character length for a chunk to be indexed. Chunks shorter than this "
+             "(e.g. section headers like 'SUICIDAL BEHAVIOR') are skipped to reduce retrieval noise. "
+             "Use 0 to disable (default: 50)"
+    )
+    
+    parser.add_argument(
+        "--min-chunk-words",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Minimum word count for a chunk. Chunks with fewer words are skipped. "
+             "Use 0 or omit to disable (default: disabled)"
+    )
+    
+    parser.add_argument(
+        "--no-normalize-newlines",
+        action="store_true",
+        help="Disable newline normalization. By default, short lines (e.g. section headers) "
+             "are merged with the next paragraph so they are not standalone chunks; "
+             "this preserves subtitles while reducing noise."
+    )
+    
+    parser.add_argument(
+        "--max-short-line-chars",
+        type=int,
+        default=80,
+        help="Lines shorter than this (chars) are merged with the next line when "
+             "normalize-newlines is enabled (default: 80)"
     )
     
     parser.add_argument(
@@ -338,6 +373,10 @@ Examples:
     logger.info(f"  Collection Name: {args.collection_name}")
     logger.info(f"  Chunk Size: {args.chunk_size}")
     logger.info(f"  Chunk Overlap: {args.chunk_overlap}")
+    logger.info(f"  Min Chunk Length: {args.min_chunk_length} (chars)")
+    logger.info(f"  Min Chunk Words: {args.min_chunk_words or 'disabled'}")
+    logger.info(f"  Normalize Newlines: {not args.no_normalize_newlines}")
+    logger.info(f"  Max Short Line Chars: {args.max_short_line_chars}")
     logger.info(f"  Page Chunks: {not args.no_page_chunks}")
     logger.info(f"  Filter References: {not args.no_filter_references}")
     logger.info(f"  Clean Existing: {not args.no_clean}")
@@ -377,7 +416,11 @@ Examples:
             filter_references=not args.no_filter_references,
             clean_existing=not args.no_clean,
             check_duplicates=args.check_duplicates,
-            duplicate_threshold=args.duplicate_threshold
+            duplicate_threshold=args.duplicate_threshold,
+            min_chunk_length=args.min_chunk_length,
+            min_chunk_words=args.min_chunk_words,
+            normalize_newlines=not args.no_normalize_newlines,
+            max_short_line_chars=args.max_short_line_chars
         )
         
         elapsed_time = time.time() - start_time
