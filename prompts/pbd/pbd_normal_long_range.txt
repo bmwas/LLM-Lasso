@@ -1,0 +1,64 @@
+We have a pediatric clinical dataset collected from children and adolescents diagnosed with pediatric bipolar disorder, with common comorbidities including ADHD and anxiety disorders (e.g., GAD, specific phobia, social anxiety), and depressive spectrum conditions (e.g., major depression, dysthymia). Our goal is to build a statistical Lasso (L1-regularized) classification model to predict whether a participant has **suicidal ideation** (SI+) versus **no suicidal ideation** (SI−), based on the **provided** clinical and psychosocial predictors.
+
+### HARD CONSTRAINT: USE ONLY PROVIDED CONTEXT (NO SPECULATION / NO EXTERNAL FACTS)
+You MUST use **only**:
+1) the information in this prompt, and
+2) the predictor names provided in `{factors}`.
+
+You must NOT:
+- cite or rely on external literature, “known risk factors,” or general clinical evidence beyond what is explicitly stated here,
+- infer what a predictor measures beyond what its name directly indicates,
+- assume directionality (risk vs protective) unless explicit in the predictor name,
+- add variables, mechanisms, or associations not present in `{factors}`,
+- “fill in” missing details with guesses.
+
+If a predictor name is ambiguous or not self-explanatory, treat it as **low-evidence** and penalize it more.
+
+---
+
+## Task
+Provide **penalty factors** (feature-specific Lasso weights) for each predictor provided. These penalty factors must be **integers between 0 and 10 (inclusive)**, where:
+- **0** indicates the predictor name **explicitly** signals strong, direct relevance to suicidal ideation classification (e.g., the name contains terms like suicid*, suicidal ideation, self-harm, attempt, NSSI).
+- **10** indicates the predictor name is unclear/ambiguous OR suggests minimal/indirect relevance based on the name alone.
+
+The penalty factors must be listed in the **exact same order** as the predictors provided in `{factors}`.
+
+---
+
+## Name-Only Scoring Rules (apply strictly)
+Assign penalties using ONLY the predictor name. Use the following bands (lower = more name-specific to SI/self-harm):
+
+- **Penalty = 0–2** (High specificity)
+  Predictor name explicitly references SI or self-harm concepts (e.g., suicidal ideation, suicid*, self-harm, attempt, NSSI).
+  - Use **0** when the SI/self-harm reference is explicit and unambiguous.
+  - Use **1–2** only if the term is present but slightly less direct/clear.
+
+- **Penalty = 3–5** (Moderate specificity)
+  Predictor name explicitly references severe mood/affective constructs in the prompt’s diagnostic scope (e.g., depression severity, dysthymia symptoms, bipolar episode severity) AND is clearly interpretable from the name alone.
+  - Use lower values (3–4) when clearly severe/symptom-severity oriented.
+  - Use higher value (5) when only moderately clear from the name.
+
+- **Penalty = 6–8** (Low specificity)
+  Predictor name references broader clinical/psychosocial constructs in scope (e.g., anxiety, ADHD symptoms, functioning, sleep) but does not explicitly reference SI/self-harm.
+  - Use **6** when the construct is clearly in-scope and interpretable from the name.
+  - Use **7–8** as interpretability decreases.
+
+- **Penalty = 9–10** (Unclear / ambiguous / distal)
+  Predictor name is ambiguous, administrative, demographic, unclear, or not interpretable without additional definitions.
+  - Use **10** when the name provides minimal interpretable meaning for SI classification.
+
+---
+
+## Output Requirements
+1) Preserve the **exact order** of predictors in `{factors}`.
+2) For each predictor, output:
+   - Penalty (0–10)
+   - A brief rationale (≤ 1 sentence) grounded ONLY in the predictor name (no external claims).
+
+**Output format (repeat for each predictor, in order):**
+Predictor: <name> | Penalty: <0-10> | Rationale: <1 sentence max, name-grounded>
+
+Do not include meta-commentary or disclaimers.
+
+The list of predictors is: {factors}
+

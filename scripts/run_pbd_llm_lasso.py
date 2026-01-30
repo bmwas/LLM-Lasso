@@ -732,7 +732,9 @@ def save_rag_retrieved_documents(
 ) -> Dict[str, Any]:
     """
     Retrieve and save all RAG documents with their sources to a JSON file.
-    
+    This save is MANDATORY when PDF RAG is enabled so that retrieved documents
+    are always persisted to rag_retrieved_documents.json.
+
     Args:
         feature_names: List of feature names used for queries
         category: Category/domain context
@@ -740,7 +742,7 @@ def save_rag_retrieved_documents(
         pdf_rag_num_docs: Number of documents to retrieve per query
         save_dir: Directory to save the output
         logger: Logger instance
-    
+
     Returns:
         Dictionary with retrieved documents information
     """
@@ -748,13 +750,27 @@ def save_rag_retrieved_documents(
     logger.info("=" * 60)
     logger.info("SAVING RAG RETRIEVED DOCUMENTS")
     logger.info("=" * 60)
-    
+
     if pdf_vectorstore is None:
         logger.warning("No PDF vectorstore available - skipping RAG document saving")
         return {}
-    
+
+    # Log collection size so we can see if we're hitting an empty collection (e.g. wrong collection name)
+    try:
+        coll = pdf_vectorstore._collection
+        chunk_count = coll.count()
+        logger.info(f"RAG vectorstore collection has {chunk_count} document chunks (save path: {os.path.abspath(save_dir)})")
+        if chunk_count == 0:
+            logger.warning(
+                "RAG vectorstore has 0 chunks - rag_retrieved_documents.json will be empty. "
+                "Ensure --pdf_persist_directory and --pdf_collection_name match how you indexed "
+                "(index_pdf_vectorstore.py uses --collection-name pdf_documents by default)."
+            )
+    except Exception as e:
+        logger.warning(f"Could not get vectorstore chunk count: {e}")
+
     retriever = pdf_vectorstore.as_retriever(search_kwargs={"k": pdf_rag_num_docs})
-    
+
     rag_documents = {
         "metadata": {
             "category": category,
@@ -765,46 +781,53 @@ def save_rag_retrieved_documents(
         "queries": {},
         "all_documents": []
     }
-    
+
     seen_contents = set()
     doc_id = 1
-    
-    for feature in feature_names:
+
+    num_with_docs = 0
+    for idx, feature in enumerate(feature_names):
         query = f"Information about {feature} related to {category}"
         try:
             docs = retriever.get_relevant_documents(query)[:pdf_rag_num_docs]
-            
+            if docs:
+                num_with_docs += 1
+            if idx < 3:
+                logger.info(f"  Feature '{feature[:50]}...' retrieved {len(docs)} doc(s)")
             feature_docs = []
             for doc in docs:
-                content_preview = doc.page_content[:500] if len(doc.page_content) > 500 else doc.page_content
+                # LangChain Document: page_content is the main text; fallback for compatibility
+                page_content = getattr(doc, "page_content", None) or getattr(doc, "content", "") or ""
+                content_preview = page_content[:500] if len(page_content) > 500 else page_content
                 content_hash = hash(content_preview)
-                
+
                 doc_info = {
                     "doc_id": f"doc_{doc_id}",
                     "source_file": doc.metadata.get("filename", doc.metadata.get("source", "Unknown")),
                     "page": doc.metadata.get("page", "N/A"),
                     "chunk_index": doc.metadata.get("chunk_index", "N/A"),
-                    "content_preview": content_preview + ("..." if len(doc.page_content) > 500 else ""),
-                    "full_content": doc.page_content,
-                    "content_length": len(doc.page_content),
+                    "content_preview": content_preview + ("..." if len(page_content) > 500 else ""),
+                    "full_content": page_content,
+                    "content_length": len(page_content),
                     "metadata": {k: str(v) for k, v in doc.metadata.items()}
                 }
-                
+
                 feature_docs.append(doc_info)
-                
-                # Add to all_documents if not seen before
+
                 if content_hash not in seen_contents:
                     seen_contents.add(content_hash)
                     rag_documents["all_documents"].append(doc_info)
                     doc_id += 1
-            
+
             rag_documents["queries"][feature] = {
                 "query": query,
                 "num_docs_retrieved": len(feature_docs),
                 "documents": feature_docs
             }
-            
+
         except Exception as e:
+            if idx < 3:
+                logger.warning(f"  Feature '{feature[:50]}...' retrieval failed: {e}")
             logger.warning(f"Error retrieving docs for {feature}: {e}")
             rag_documents["queries"][feature] = {
                 "query": query,
@@ -812,7 +835,7 @@ def save_rag_retrieved_documents(
                 "documents": [],
                 "error": str(e)
             }
-    
+
     # Summary statistics
     rag_documents["summary"] = {
         "total_unique_documents": len(rag_documents["all_documents"]),
@@ -822,12 +845,28 @@ def save_rag_retrieved_documents(
             d["source_file"] for d in rag_documents["all_documents"]
         ))
     }
-    
-    # Save to JSON
+
+    # MANDATORY: Always write RAG retrieved documents to disk (atomic write + sync)
+    os.makedirs(save_dir, exist_ok=True)
     rag_file = os.path.join(save_dir, "rag_retrieved_documents.json")
-    with open(rag_file, 'w') as f:
-        json.dump(rag_documents, f, indent=2, ensure_ascii=False)
-    
+    rag_file_tmp = rag_file + ".tmp"
+    try:
+        with open(rag_file_tmp, "w", encoding="utf-8") as f:
+            json.dump(rag_documents, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(rag_file_tmp, rag_file)
+    except Exception as e:
+        logger.error(f"Failed to save RAG retrieved documents to {rag_file}: {e}")
+        raise
+    finally:
+        if os.path.exists(rag_file_tmp):
+            try:
+                os.remove(rag_file_tmp)
+            except OSError:
+                pass
+
+    logger.info(f"RAG retrieval summary: {num_with_docs}/{len(feature_names)} features had at least 1 doc")
     logger.info(f"Total unique documents retrieved: {rag_documents['summary']['total_unique_documents']}")
     logger.info(f"Unique source files: {len(rag_documents['summary']['unique_source_files'])}")
     for src in rag_documents['summary']['unique_source_files'][:5]:  # Show first 5
@@ -4224,8 +4263,8 @@ class PipelineArguments:
     pdf_persist_directory: str = field(default="pdf_vectorstore", metadata={
         "help": "Path to PDF vectorstore directory"
     })
-    pdf_collection_name: str = field(default="scientific_papers", metadata={
-        "help": "Name of the PDF vectorstore collection"
+    pdf_collection_name: str = field(default="pdf_documents", metadata={
+        "help": "Name of the PDF vectorstore collection (must match index_pdf_vectorstore.py --collection-name, default: pdf_documents)"
     })
     pdf_rag_num_docs: int = field(default=3, metadata={
         "help": "Number of PDF documents to retrieve for RAG"
@@ -4315,6 +4354,9 @@ class PipelineArguments:
     })
     smote_random_state: int = field(default=42, metadata={
         "help": "Random state for SMOTE reproducibility"
+    })
+    skip_standard_lasso: bool = field(default=False, metadata={
+        "help": "Skip Standard Lasso and comparison plots; run only LLM-Lasso"
     })
     
     # Logging options
@@ -4452,7 +4494,7 @@ def main():
             llm_backend=args.llm_backend
         )
         
-        # Step 6b: Save RAG retrieved documents with sources
+        # Step 6b: MANDATORY - Save RAG retrieved documents when PDF RAG is enabled
         if args.pdf_rag and pdf_vectorstore is not None:
             save_rag_retrieved_documents(
                 feature_names=validated_features,
@@ -4500,83 +4542,93 @@ def main():
                 lmda_path_size=args.lmda_path_size
             )
         
-        # Step 7b: Run Standard Lasso for comparison
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info("STEP 7b: RUNNING STANDARD LASSO FOR COMPARISON")
-        logger.info("=" * 60)
-        
-        standard_lasso_dir = os.path.join(args.save_dir, "standard_lasso")
-        os.makedirs(standard_lasso_dir, exist_ok=True)
-        
-        if args.use_loo:
-            # Use Leave-One-Out cross-validation for standard lasso
-            standard_lasso_result = run_standard_lasso_with_loo(
-                X=X_imputed,
-                y=y,
-                save_dir=standard_lasso_dir,
-                inner_cv_folds=args.inner_cv_folds,
-                n_threads=args.n_threads,
-                logger=logger,
-                participant_ids=X_imputed.index,
-                use_smote=args.use_smote,
-                smote_random_state=args.smote_random_state,
-                lmda_path_size=args.lmda_path_size,
-                optimize_metric=args.optimize_metric,
-                compute_ci=args.compute_ci,
-                bootstrap_method=args.bootstrap_method,
-                bootstrap_n_rounds=args.bootstrap_n_rounds,
-                ci_level=args.ci_level
-            )
+        # Step 7b: Run Standard Lasso for comparison (optional)
+        if args.skip_standard_lasso:
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("STEP 7b: SKIPPING STANDARD LASSO (--skip_standard_lasso)")
+            logger.info("=" * 60)
+            standard_lasso_result = None
+            standard_lasso_dir = None
+            comparison_dir = None
+            comparison_summary_file = None
         else:
-            # Use standard train/test split for standard lasso
-            standard_lasso_result = run_standard_lasso_with_penalties(
-                X_train=X_train,
-                y_train=y_train,
-                X_test=X_test,
-                y_test=y_test,
-                save_dir=standard_lasso_dir,
-                n_threads=args.n_threads,
-                folds_cv=args.folds_cv,
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("STEP 7b: RUNNING STANDARD LASSO FOR COMPARISON")
+            logger.info("=" * 60)
+            
+            standard_lasso_dir = os.path.join(args.save_dir, "standard_lasso")
+            os.makedirs(standard_lasso_dir, exist_ok=True)
+            
+            if args.use_loo:
+                # Use Leave-One-Out cross-validation for standard lasso
+                standard_lasso_result = run_standard_lasso_with_loo(
+                    X=X_imputed,
+                    y=y,
+                    save_dir=standard_lasso_dir,
+                    inner_cv_folds=args.inner_cv_folds,
+                    n_threads=args.n_threads,
+                    logger=logger,
+                    participant_ids=X_imputed.index,
+                    use_smote=args.use_smote,
+                    smote_random_state=args.smote_random_state,
+                    lmda_path_size=args.lmda_path_size,
+                    optimize_metric=args.optimize_metric,
+                    compute_ci=args.compute_ci,
+                    bootstrap_method=args.bootstrap_method,
+                    bootstrap_n_rounds=args.bootstrap_n_rounds,
+                    ci_level=args.ci_level
+                )
+            else:
+                # Use standard train/test split for standard lasso
+                standard_lasso_result = run_standard_lasso_with_penalties(
+                    X_train=X_train,
+                    y_train=y_train,
+                    X_test=X_test,
+                    y_test=y_test,
+                    save_dir=standard_lasso_dir,
+                    n_threads=args.n_threads,
+                    folds_cv=args.folds_cv,
+                    logger=logger,
+                    lmda_path_size=args.lmda_path_size
+                )
+            
+            # Step 8: Generate comparison plots
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("STEP 8: GENERATING COMPARISON PLOTS")
+            logger.info("=" * 60)
+            
+            comparison_dir = os.path.join(args.save_dir, "comparison")
+            os.makedirs(comparison_dir, exist_ok=True)
+            
+            comparison_stats = generate_comparison_plots(
+                llm_lasso_results=lasso_result,
+                standard_lasso_results=standard_lasso_result,
+                save_dir=comparison_dir,
                 logger=logger,
-                lmda_path_size=args.lmda_path_size
+                use_loo=args.use_loo
             )
-        
-        # Step 8: Generate comparison plots
-        logger.info("")
-        logger.info("=" * 60)
-        logger.info("STEP 8: GENERATING COMPARISON PLOTS")
-        logger.info("=" * 60)
-        
-        comparison_dir = os.path.join(args.save_dir, "comparison")
-        os.makedirs(comparison_dir, exist_ok=True)
-        
-        comparison_stats = generate_comparison_plots(
-            llm_lasso_results=lasso_result,
-            standard_lasso_results=standard_lasso_result,
-            save_dir=comparison_dir,
-            logger=logger,
-            use_loo=args.use_loo
-        )
-        
-        # Save comparison summary JSON
-        comparison_summary = {
-            "llm_lasso": {
-                "method": "llm_lasso",
-                "summary": lasso_result.get('summary', {})
-            },
-            "standard_lasso": {
-                "method": "standard_lasso",
-                "summary": standard_lasso_result.get('summary', {})
-            },
-            "comparison_stats": comparison_stats
-        }
-        
-        comparison_summary_file = os.path.join(comparison_dir, "comparison_summary.json")
-        with open(comparison_summary_file, 'w') as f:
-            # Convert numpy types to JSON-serializable Python types
-            json.dump(convert_to_json_serializable(comparison_summary), f, indent=2)
-        logger.info(f"Comparison summary saved to: {comparison_summary_file}")
+            
+            # Save comparison summary JSON
+            comparison_summary = {
+                "llm_lasso": {
+                    "method": "llm_lasso",
+                    "summary": lasso_result.get('summary', {})
+                },
+                "standard_lasso": {
+                    "method": "standard_lasso",
+                    "summary": standard_lasso_result.get('summary', {})
+                },
+                "comparison_stats": comparison_stats
+            }
+            
+            comparison_summary_file = os.path.join(comparison_dir, "comparison_summary.json")
+            with open(comparison_summary_file, 'w') as f:
+                # Convert numpy types to JSON-serializable Python types
+                json.dump(convert_to_json_serializable(comparison_summary), f, indent=2)
+            logger.info(f"Comparison summary saved to: {comparison_summary_file}")
         
         # Pipeline complete
         pipeline_time = time.time() - pipeline_start
@@ -4590,21 +4642,27 @@ def main():
         logger.info("")
         logger.info("Output directories:")
         logger.info(f"  - {args.save_dir}/ (LLM-Lasso results)")
-        logger.info(f"  - {standard_lasso_dir}/ (Standard Lasso results)")
-        logger.info(f"  - {comparison_dir}/ (Comparison plots)")
+        if standard_lasso_dir is not None:
+            logger.info(f"  - {standard_lasso_dir}/ (Standard Lasso results)")
+        if comparison_dir is not None:
+            logger.info(f"  - {comparison_dir}/ (Comparison plots)")
         logger.info("")
         logger.info("Key output files:")
         logger.info(f"  - {os.path.join(args.save_dir, 'penalty_scores.json')}")
         if args.use_loo:
             logger.info(f"  - {os.path.join(args.save_dir, 'loo_predictions.csv')}")
-            logger.info(f"  - {os.path.join(standard_lasso_dir, 'loo_predictions.csv')}")
+            if standard_lasso_dir is not None:
+                logger.info(f"  - {os.path.join(standard_lasso_dir, 'loo_predictions.csv')}")
         elif lasso_result.get('results') is not None:
             logger.info(f"  - {os.path.join(args.save_dir, 'lasso_results.csv')}")
-            logger.info(f"  - {os.path.join(standard_lasso_dir, 'lasso_results.csv')}")
+            if standard_lasso_dir is not None:
+                logger.info(f"  - {os.path.join(standard_lasso_dir, 'lasso_results.csv')}")
         logger.info(f"  - {os.path.join(args.save_dir, 'summary.json')}")
-        logger.info(f"  - {os.path.join(standard_lasso_dir, 'summary.json')}")
-        logger.info(f"  - {comparison_summary_file}")
-        logger.info(f"  - {os.path.join(comparison_dir, 'comparison_dashboard.png')}")
+        if standard_lasso_dir is not None:
+            logger.info(f"  - {os.path.join(standard_lasso_dir, 'summary.json')}")
+        if comparison_summary_file is not None:
+            logger.info(f"  - {comparison_summary_file}")
+            logger.info(f"  - {os.path.join(comparison_dir, 'comparison_dashboard.png')}")
         logger.info(f"  - {log_file}")
         logger.info("")
         
@@ -4612,7 +4670,7 @@ def main():
             logger.info("Penalty scores generated successfully!")
             logger.info("Lasso training was skipped (adelie not installed)")
             logger.info("To run Lasso, install adelie: cd adelie-fork && pip install -e .")
-        elif args.use_loo:
+        elif not args.skip_standard_lasso and standard_lasso_result is not None and args.use_loo:
             llm_summary = lasso_result['summary']
             std_summary = standard_lasso_result['summary']
             
@@ -4667,9 +4725,10 @@ def main():
             logger.info(f"LLM-Lasso - Best model test error: {lasso_result['summary']['test_error']:.4f}")
             logger.info(f"LLM-Lasso - Best model AUROC: {lasso_result['summary']['auroc']}")
             logger.info(f"LLM-Lasso - Features selected: {lasso_result['summary']['n_features']}/{lasso_result['summary']['total_features']}")
-            logger.info("")
-            logger.info(f"Standard Lasso - Best model test error: {standard_lasso_result['summary'].get('test_error', 'N/A')}")
-            logger.info(f"Standard Lasso - Best model AUROC: {standard_lasso_result['summary'].get('auroc', 'N/A')}")
+            if standard_lasso_result is not None:
+                logger.info("")
+                logger.info(f"Standard Lasso - Best model test error: {standard_lasso_result['summary'].get('test_error', 'N/A')}")
+                logger.info(f"Standard Lasso - Best model AUROC: {standard_lasso_result['summary'].get('auroc', 'N/A')}")
         
         return 0
         

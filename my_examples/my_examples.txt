@@ -14,4 +14,4 @@ cd /home/benson/Downloads/LLM-Lassodocker compose --env-file .env -f opensource_
 Wait for models to load (check health endpoints):
 curl http://localhost:8000/healthcurl http://localhost:8001/health
 
-python scripts/run_pbd_llm_lasso.py --dataset_path /home/benson/Downloads/pbd_dataset/B1afocal.csv   --feature_names_path ./examples/example_data/pbd_focal_variables.txt   --prompt-filename prompts/pbd_normal.txt   --target_column target_var --category "Suicidal Ideation"  --pdf_rag  --use_loo    --inner_cv_folds 10    --use_smote  --llm-backend vllm  --lmda_path_size 100
+python scripts/run_pbd_llm_lasso.py   --dataset_path /home/benson/Downloads/pbd_dataset/new_variables/B1a_focal_ideation_LLMready.csv   --feature_names_path ./examples/example_data/pbd_focal_cleaned_variables.txt   --prompt-filename prompts/pbd/pbd_cot.txt   --target_column target_var   --category "Suicidal Ideation"   --pdf_rag   --use_loo   --inner_cv_folds 10   --use_smote   --llm-backend vllm   --lmda_path_size 100

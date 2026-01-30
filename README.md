@@ -881,6 +881,7 @@ python scripts/run_pbd_llm_lasso.py \
 | `--ci_level` | Confidence level (e.g., 0.95 for 95% CI) | `0.95` |
 | `--log_level` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`) | `INFO` |
 | `--wipe` | Clear previous results before running | `False` |
+| `--skip_standard_lasso` | Skip Standard Lasso (uniform penalties) and comparison plots; run only LLM-Lasso. Use when you only need LLM-penalized results and want to save time. | `False` |
 
 ### Understanding Output Files
 
@@ -1355,6 +1356,32 @@ python scripts/run_pbd_llm_lasso.py \
 |----------|-------------|---------|
 | `--use_smote` | Enable SMOTE for class balancing | `False` |
 | `--smote_random_state` | Random state for SMOTE reproducibility | `42` |
+
+### Skipping Standard Lasso
+
+By default, the pipeline runs both **LLM-Lasso** (with LLM-generated penalties) and **Standard Lasso** (uniform penalties) and produces comparison plots. Use `--skip_standard_lasso` to run only LLM-Lasso and skip the Standard Lasso baseline and comparison step.
+
+**When to use `--skip_standard_lasso`:**
+- You only need LLM-Lasso results (e.g., penalty scores, predictions, coefficients).
+- You want to reduce runtime (Standard Lasso + comparison can add significant time with LOO).
+- You are iterating on prompts or RAG and do not need the baseline comparison yet.
+
+**Example:**
+
+```bash
+python scripts/run_pbd_llm_lasso.py \
+    --dataset_path /path/to/dataset.csv \
+    --feature_names_path /path/to/features.txt \
+    --prompt-filename prompts/pbd_cot.txt \
+    --target_column target_var \
+    --category "Suicidal Ideation" \
+    --pdf_rag \
+    --use_loo \
+    --inner_cv_folds 10 \
+    --skip_standard_lasso
+```
+
+With `--skip_standard_lasso`, the pipeline does **not** create `standard_lasso/` or `comparison/` directories; only LLM-Lasso outputs (e.g. `penalty_scores.json`, `loo_predictions.csv`, `summary.json`, `rag_retrieved_documents.json`) are written.
 
 **When to use SMOTE:**
 - Low specificity with high sensitivity (model biased toward majority class)
