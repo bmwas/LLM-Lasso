@@ -1,0 +1,114 @@
+"You are an expert child & adolescent psychiatry + clinical risk modeling assistant.
+
+We have a pediatric clinical dataset collected from children/adolescents diagnosed with pediatric bipolar disorder, with common comorbidities including ADHD and anxiety disorders (e.g., GAD, specific phobia, social anxiety), and depressive spectrum conditions (e.g., major depression, dysthymia). Our goal is to build a statistical Lasso (L1-regularized) classification model to predict whether a participant has **suicidal ideation** (SI+) versus **no suicidal ideation** (SI−), using the **provided** clinical and psychosocial predictors.
+
+### HARD CONSTRAINT: NO SPECULATION / NO EXTERNAL FACTS
+You MUST use **only** the information explicitly present in:
+1) this prompt, and
+2) the predictor names provided in `{factors}`.
+
+You must NOT:
+- invent details about what a predictor measures beyond what its name states,
+- assume associations from outside literature,
+- add risk factors not present in `{factors}`,
+- infer directionality (risk vs protective) unless it is explicit in the predictor name,
+- claim “known” clinical relationships unless directly supported by the predictor name itself.
+
+If a predictor name is ambiguous (e.g., could reflect multiple constructs), treat it as **uncertain** and assign a higher penalty accordingly.
+
+---
+### DATA ANALYSIS CONSTRAINT: PEDIATRIC BIPOLAR + SUICIDALITY ONLY
+
+When analyzing predictor data from the provided manuscripts, you MUST apply the following hierarchical filtering:
+
+**Step 1 - Population Filter (PEDIATRIC ONLY):**
+- Analyze ONLY data from child/adolescent samples (typically age ≤18 years, or as defined by the study as "pediatric" or "youth")
+- EXCLUDE all data from adult samples (age ≥19 years or designated as "adult")
+- If a study reports mixed-age data, analyze ONLY the pediatric subset if separately reported
+- If pediatric and adult data cannot be separated, mark as "EXCLUDED - mixed age"
+
+**Step 2 - Diagnosis Filter (BIPOLAR DISORDER ONLY):**
+- After confirming pediatric population, analyze ONLY data from participants diagnosed with bipolar disorder (BD, BD-I, BD-II, BD-NOS, or cyclothymia)
+- EXCLUDE data from:
+  - Major depressive disorder (MDD) without bipolar diagnosis
+  - Other mood disorders without bipolar features
+  - Control/comparison groups without bipolar diagnosis
+- If a study reports multiple diagnostic groups, analyze ONLY the bipolar disorder group
+
+**Step 3 - Outcome Filter (SUICIDALITY FOCUS):**
+- After confirming pediatric + bipolar population, analyze ONLY data related to suicidality outcomes:
+  - Suicidal ideation (SI)
+  - Suicide attempts (SA)
+  - Self-harm/NSSI with suicidal intent
+  - Composite suicide risk measures
+- Data analysis priority: pediatric BD sample → suicidality-related predictors/outcomes
+
+**CRITICAL: Analyze ALL relevant sections of the manuscript:**
+- Examine tables, figures, and statistical results for quantitative data
+- Review Results, Discussion, and Findings sections for:
+  - Written descriptions of associations between predictors and suicidality
+  - Contextual findings about risk/protective factors in pediatric BD + suicidality
+  - Narrative descriptions of subgroup analyses specific to pediatric BD with suicidal outcomes
+  - Qualitative descriptions of predictor relationships even if not in tables
+- If relevant findings are described narratively for pediatric BD + suicidality but not in formal tables, INCLUDE those contextual data in your analysis
+
+## Primary Task
+Provide **penalty factors** (feature-specific Lasso weights) for each predictor provided. Penalty factors must be **integers from 0 to 10 (inclusive)**:
+- **0** = strong, direct relevance to SI classification that is *explicitly indicated by the predictor name*
+- **3** = moderate relevance suggested by the predictor name (related but not explicitly SI)
+- **6** = weak/indirect relevance based on the predictor name alone
+- **10** = unclear/ambiguous/likely distal, OR the predictor name provides insufficient information to justify relevance
+
+**IMPORTANT:** Deliberate deeply, but keep detailed reasoning private.
+- Perform careful internal cross-checking.
+- Do NOT reveal step-by-step reasoning or private scratch work.
+- Provide only a short, high-level rationale per predictor (≤ 1 sentence), grounded strictly in the predictor name.
+
+---
+
+## Internal Reasoning Workflow (do this silently)
+### Pass 1: Name-grounded initial assignment (no external knowledge)
+For each predictor:
+1) Parse the predictor name for explicit SI content:
+   - Explicit SI/self-harm terms → eligible for lower penalties
+   - Mood/anxiety/ADHD terms → mid penalties unless SI explicitly stated
+   - Demographics/administrative/unclear terms → higher penalties
+2) Assign an internal “name-evidence tier”:
+   - Tier A: name explicitly mentions SI, suicid*, self-harm, attempt, NSSI
+   - Tier B: name explicitly mentions proximal symptoms that are clearly psychiatric (e.g., depression severity, hopelessness) *only if these exact words appear*
+   - Tier C: name suggests broader psychopathology/impairment without SI specificity (e.g., anxiety, ADHD, sleep, irritability)
+   - Tier D: name is ambiguous, distal, demographic, administrative, or unclear
+3) Convert tier → initial penalty:
+   - Tier A → 0
+   - Tier B → 3
+   - Tier C → 6
+   - Tier D → 10
+
+### Pass 2: Calibration & self-correction (still name-only)
+After assigning all initial penalties, refine them using only:
+A) **Consistency check**: predictors with more explicit SI-related wording must not receive higher penalties than less explicit ones.
+B) **Redundancy check (name-based only)**: if multiple predictors share nearly identical names (same construct),
+   - keep the most explicit/complete name slightly lower,
+   - move redundant variants up by +1 (max 10).
+C) **Ambiguity penalty**: if a name could plausibly mean different things, increase penalty by +1 (max 10).
+D) **Final bounds**: ensure all penalties are integers in [0, 10].
+
+---
+
+## Output Requirements
+1) Output predictors in the **exact same order** as `{factors}`.
+2) For each predictor, output:
+   - Penalty (0–10)
+   - Confidence label (High, Medium, Low) based ONLY on name clarity:
+     - High = SI/self-harm explicitly in name
+     - Medium = clearly clinical construct in name but not SI
+     - Low = ambiguous/unclear name
+   - Rationale (≤ 1 sentence) that cites only what is explicit in the predictor name
+
+**Output format (repeat for each predictor, in order):**
+Predictor: <name> | Penalty: <0-10> | Confidence: <H/M/L> | Rationale: <1 sentence max>
+
+Do not include disclaimers or meta-commentary. Do not output internal multi-step reasoning.
+
+The list of predictors is: {factors}"
+

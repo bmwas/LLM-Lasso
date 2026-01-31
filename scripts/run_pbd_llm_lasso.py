@@ -278,6 +278,115 @@ def load_dataset(
     return X, y, matching_features
 
 
+def validate_loo_data(
+    X: pd.DataFrame,
+    y: pd.Series,
+    target_column: str,
+    dataset_path: str,
+    logger: logging.Logger,
+) -> None:
+    """
+    Validate data for LOO pipeline. On failure, prints exact row/column locations
+    to the console and exits with code 1. Checks:
+    1) No NaN in target column (reports exact row indices and index values).
+    2) No Inf in target column (reports exact rows).
+    3) Target has exactly 2 unique classes for binary classification (reports unexpected values/rows).
+    """
+    has_error = False
+    # Use a list of (title, lines) to print once at the end
+    error_sections = []
+
+    # ----- 1. Check for NaN in target -----
+    nan_mask = y.isna()
+    if nan_mask.any():
+        has_error = True
+        nan_positions = np.where(nan_mask)[0].tolist()
+        lines = [
+            "",
+            "  ISSUE: Missing values (NaN) in the target column.",
+            f"  Column name: '{target_column}'",
+            f"  Dataset: {dataset_path}",
+            f"  Total rows with NaN: {nan_mask.sum()}",
+            "",
+            "  Rows with NaN (0-based row number = position in CSV, 1-based = line number in file):",
+        ]
+        for pos in nan_positions:
+            index_val = y.index[pos] if pos < len(y.index) else "?"
+            lines.append(f"    - 0-based row: {pos}  |  1-based row: {pos + 1}  |  DataFrame index: {index_val!r}  |  value: NaN")
+        lines.append("")
+        lines.append("  FIX: Remove these rows from the dataset, or impute the target before running.")
+        error_sections.append(("MISSING VALUES IN TARGET COLUMN", lines))
+
+    # ----- 2. Check for Inf in target -----
+    try:
+        y_numeric = pd.to_numeric(y, errors="coerce")
+        inf_mask = np.isinf(y_numeric)
+        if inf_mask.any():
+            has_error = True
+            inf_positions = np.where(inf_mask)[0].tolist()
+            lines = [
+                "",
+                "  ISSUE: Infinite values (Inf/-Inf) in the target column.",
+                f"  Column name: '{target_column}'",
+                f"  Total rows with Inf: {inf_mask.sum()}",
+                "",
+                "  Rows with Inf:",
+            ]
+            for pos in inf_positions:
+                index_val = y.index[pos] if pos < len(y.index) else "?"
+                val = y.iloc[pos]
+                lines.append(f"    - 0-based row: {pos}  |  1-based row: {pos + 1}  |  DataFrame index: {index_val!r}  |  value: {val}")
+            lines.append("")
+            lines.append("  FIX: Replace or remove these rows so the target has only finite values.")
+            error_sections.append(("INFINITE VALUES IN TARGET COLUMN", lines))
+    except Exception:
+        pass
+
+    # ----- 3. Check binary target (exactly 2 classes) -----
+    y_valid = y.dropna()
+    unique_vals = np.unique(y_valid.astype(str))
+    if len(unique_vals) != 2:
+        has_error = True
+        lines = [
+            "",
+            "  ISSUE: Target must have exactly 2 classes for binary classification.",
+            f"  Column name: '{target_column}'",
+            f"  Number of unique values (after dropping NaN): {len(unique_vals)}",
+            f"  Unique values: {list(unique_vals)}",
+            "",
+            "  Value counts:",
+        ]
+        for v, cnt in y_valid.value_counts().items():
+            lines.append(f"    - {v!r}: {cnt} rows")
+        lines.append("")
+        lines.append("  FIX: Ensure the target column has exactly two distinct values (e.g. 0/1 or Yes/No).")
+        error_sections.append(("TARGET NOT BINARY", lines))
+
+    if not has_error:
+        return
+
+    # ----- Print to console and log, then exit -----
+    sep = "=" * 70
+    header = "DATA VALIDATION FAILED — fix the issues below and re-run"
+    full_lines = [sep, header, sep]
+    for title, section_lines in error_sections:
+        full_lines.append("")
+        full_lines.append(f"  [{title}]")
+        full_lines.extend(section_lines)
+    full_lines.append("")
+    full_lines.append(sep)
+    full_lines.append("Exiting with code 1.")
+    full_lines.append(sep)
+    msg = "\n".join(full_lines)
+
+    # Ensure it appears on console
+    print(msg, file=sys.stderr)
+    for line in full_lines:
+        logger.error(line)
+    logger.error("Validation failed. Exiting.")
+    sys.exit(1)
+
+
 def impute_missing_values(
     X: pd.DataFrame,
     strategy: str,
@@ -4438,6 +4547,9 @@ def main():
             feature_names,
             logger
         )
+        
+        # Step 2b: Validate data for LOO (target NaN/Inf, binary target) — exits with clear message if invalid
+        validate_loo_data(X, y, args.target_column, args.dataset_path, logger)
         
         # Step 3: Impute missing values
         logger.info("")

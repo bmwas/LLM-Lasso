@@ -13,8 +13,6 @@ import pymupdf4llm
 import pymupdf
 from tqdm import tqdm
 
-# Set up module logger
-logger = logging.getLogger("pdf_rag.process")
 
 
 def extract_text_from_pdf(
