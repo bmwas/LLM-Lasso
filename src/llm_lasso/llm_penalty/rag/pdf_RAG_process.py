@@ -244,7 +244,7 @@ def get_pdf_retrieval_context(
     for feature in batch_features:
         query = f"Information about {feature} related to {category}"
         try:
-            docs = retriever.get_relevant_documents(query)[:num_docs]
+            docs = retriever.invoke(query)[:num_docs]
             for doc in docs:
                 # Deduplicate by content
                 content_hash = hash(doc.page_content[:500])  # Use first 500 chars for hash
