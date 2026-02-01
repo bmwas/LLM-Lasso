@@ -18,4 +18,4 @@ python scripts/run_pbd_llm_lasso.py   --dataset_path /home/benson/Downloads/pbd_
 
 
 
-python scripts/run_pbd_llm_lasso.py --dataset_path /home/benson/Downloads/pbd_dataset/old_variables/B1afocal.csv   --feature_names_path ./examples/example_data/pbd_focal_variables.txt.txt   --prompt-filename prompts/pbd/pbd_cot.txt   --target_column target_var --category "Suicidal Ideation"  --pdf_rag  --use_loo    --inner_cv_folds 10    --use_smote  --llm-backend vllm  --lmda_path_size 100
+python scripts/run_pbd_llm_lasso.py --dataset_path /home/benson/Downloads/pbd_dataset/old_variables/B1afocal.csv   --feature_names_path ./examples/example_data/pbd_focal_variables.txt.txt   --prompt-filename prompts/pbd/pbd_normal.txt   --target_column target_var --category "Suicidal Ideation"  --pdf_rag  --use_loo    --inner_cv_folds 10    --use_smote  --llm-backend vllm  --lmda_path_size 100
